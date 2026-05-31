@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+*.egg
+
+# Virtualenv
+.env/
+.venv/
+venv/
+env/
+
+# Environment variables (secrets)
+.env.local
+.env.*.local
+*.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ORCH runtime artifacts
+.orch/
+~/.orch/
+
+# Local agent settings (user-specific)
+.openclaude/
+.claude/
+.kiro/
+.copilot/
+
+# Chat & misc
+chathistory.json
+*.log
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Pytest / mypy / coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Secrets / credentials
+*.pem
+*.key
+*.cert
+*.crt
+secrets.json
+credentials.json
+token.json
+
+# Node (if dashboard has JS deps)
+node_modules/
+npm-debug.log*
+
+# Docker
+.docker/
+docker-compose.override.yml

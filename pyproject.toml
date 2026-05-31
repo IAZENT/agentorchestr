@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orch"
+version = "0.2.0"
+description = "Zero-cost agent orchestrator over any installed CLI coding agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ORCH contributors" }]
+keywords = ["agents", "orchestration", "llm", "tmux", "mcp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+dependencies = [
+    "aiosqlite>=0.20",
+    "httpx>=0.27",
+    "rich>=13.7",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "libtmux>=0.55,<0.60",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.20"]
+search = ["ddgs>=9.0"]
+ollama = []  # Ollama is HTTP-only via httpx — no Python pkg required
+test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "mcp>=1.20",
+    "ddgs>=9.0",
+]
+
+[project.scripts]
+orch = "orchestrator:_sync_main"
+
+[project.urls]
+Homepage = "https://github.com/you/orch"
+Documentation = "https://github.com/you/orch#readme"
+
+[tool.setuptools]
+py-modules = [
+    "orchestrator",
+    "agent_detector",
+    "router",
+    "state_store",
+    "session_manager",
+    "goal_decomposer",
+    "scheduler",
+    "quality_gate",
+    "monitor",
+    "context_manager",
+    "hooks",
+    "mcp_bridge",
+    "web_search",
+]
+
+[tool.setuptools.packages.find]
+include = ["agents*", "dashboard*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
