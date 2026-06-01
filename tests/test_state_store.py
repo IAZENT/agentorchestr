@@ -189,3 +189,54 @@ async def test_reset_running_workers_for_crash_recovery(store):
     assert rows["w03"]["state"] == "done"
     # idempotent
     assert await store.reset_running_workers("s1") == 0
+
+
+@pytest.mark.asyncio
+async def test_op_log_idempotent_replay(store):
+    """begin_op + finish_op once; second begin_op with the same key returns
+    the cached result without re-executing."""
+    await store.save_session("s1", {"goal": "g", "plan": {}, "agents": [], "status": "active"})
+
+    op_id, prior = await store.begin_op(
+        "s1", "spawn_worker", "spawn:abc123",
+        {"task": "build it", "perspective": "implementer"},
+    )
+    assert prior is None
+    assert op_id is not None
+
+    await store.finish_op(op_id, {"worker_id": "w01", "branch": "feat/x"})
+
+    # Second call with the SAME key MUST return the cached result.
+    op_id2, prior2 = await store.begin_op(
+        "s1", "spawn_worker", "spawn:abc123",
+        {"task": "different args don't matter", "perspective": "tester"},
+    )
+    assert op_id2 is None, "completed op must NOT get a new row"
+    assert prior2 == {"worker_id": "w01", "branch": "feat/x"}
+
+
+@pytest.mark.asyncio
+async def test_op_log_pending_ops_for_resume(store):
+    """An op begun but not finished is still 'pending' — resume sees it."""
+    await store.save_session("s1", {"goal": "g", "plan": {}, "agents": [], "status": "active"})
+    op_id_a, _ = await store.begin_op("s1", "spawn_worker", "spawn:a", {"x": 1})
+    op_id_b, _ = await store.begin_op("s1", "verify",       "verify:b", {"y": 2})
+    await store.finish_op(op_id_a, {"worker_id": "w01"})
+    # b is still pending
+    pending = await store.get_pending_ops("s1")
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "verify"
+    assert pending[0]["idempotency_key"] == "verify:b"
+    assert pending[0]["args"] == {"y": 2}
+
+
+@pytest.mark.asyncio
+async def test_op_log_history_survives_failure(store):
+    """A failed op stays in the log so resume can retry or skip it."""
+    await store.save_session("s1", {"goal": "g", "plan": {}, "agents": [], "status": "active"})
+    op_id, _ = await store.begin_op("s1", "verify", "v:1", {})
+    await store.finish_op(op_id, {"err": "tests crashed"}, state="failed")
+    log = await store.get_op_log("s1")
+    assert len(log) == 1
+    assert log[0]["state"] == "failed"
+    assert log[0]["result"] == {"err": "tests crashed"}

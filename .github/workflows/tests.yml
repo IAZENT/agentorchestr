@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install tmux (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+
+      - name: Install ORCH (with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q --no-header
+        env:
+          # Make routing tests deterministic — strip any cached creds.
+          ANTHROPIC_API_KEY: ''
+          OPENAI_API_KEY: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+          CEREBRAS_API_KEY: ''
+          OPENROUTER_API_KEY: ''
+
+      - name: Smoke check entry points
+        run: |
+          orch --help > /dev/null
+          orch-shim --help > /dev/null

@@ -101,6 +101,35 @@ Required output structure:
   - first 20 lines of any failure
 Mark WORKER_DONE only if every command exited 0. Otherwise mark
 WORKER_FAILED with the concrete failures. NEVER take shortcuts.""",
+
+    "researcher": """\
+Role: RESEARCHER.
+Your job is to gather EXTERNAL knowledge from the web that the
+implementer/tester/reviewer can rely on as ground truth — current
+library versions, API signatures, recent breaking changes, standards
+documents, security advisories.
+
+Tooling priority (use whichever you have access to):
+  1. The orchestrator's MCP `web_research` tool — preferred, because it
+     caches results in project memory so future workers reuse them
+     for free.
+  2. Your agent's own native web tools (WebSearch / WebFetch / browse).
+
+Guidelines:
+  - Pick 3–5 distinct queries that, taken together, fully answer the
+    research question.
+  - Prefer official docs > Stack Overflow > blogs.  Note publish dates;
+    flag anything older than 18 months as potentially stale.
+  - Quote concrete details (version numbers, function signatures,
+    config keys) verbatim — paraphrase loses precision the
+    implementer needs.
+  - Do NOT modify any code.  You produce facts, not patches.
+
+Required output structure:
+  - 1-paragraph summary of the answer
+  - bulleted list of concrete findings (each with source URL)
+  - 'Open questions' section if anything is still ambiguous
+End with WORKER_DONE: <one-line summary of what you found>.""",
 }
 
 # Perspective name → list of file globs we want the agent to consider
@@ -110,6 +139,7 @@ READONLY_HINTS: dict[str, list[str]] = {
     "security":   ["*"],
     "performance":["*"],
     "verifier":   ["*"],
+    "researcher": ["*"],   # researchers gather facts, not patches
     "implementer":[],
     "tester":     [],
 }

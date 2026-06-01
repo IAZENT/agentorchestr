@@ -32,6 +32,7 @@ Lifecycle of a worker:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import shlex
@@ -81,6 +82,8 @@ class WorkerPool:
         store: StateStore,
         *,
         tmux_session_name: Optional[str] = None,
+        memory: object | None = None,
+        skills: object | None = None,
     ):
         self.project_root = Path(project_root)
         self.orch_session_id = orch_session_id
@@ -91,11 +94,22 @@ class WorkerPool:
         self._counter = 0
         self._tmp_root = Path(f"/tmp/orch-{orch_session_id}")
         self._tmp_root.mkdir(parents=True, exist_ok=True)
+        # Optional memory federation.  When provided, spawn_worker enriches
+        # extra_context with the most relevant retrieved memories so they
+        # end up inside the cacheable system-prompt prefix.
+        self.memory = memory
+        # Optional skills registry.  Skills whose triggers match the
+        # spawned worker's task get their body injected into extra_context.
+        self.skills = skills
 
     # ── tmux session lifecycle ────────────────────────────────────────
 
     async def start_session(self, lead_pane_cmd: list[str]) -> object:
-        """Create the tmux session and launch the lead agent in pane 0.
+        """Create the tmux session and launch the lead agent in the top pane.
+
+        Layout: ONE window with lead at the top. Worker panes split
+        horizontally below it as they spawn, so the lead can monitor
+        all workers without switching windows.
 
         `lead_pane_cmd` is the argv used to start the lead (e.g.
         ['kiro-cli', 'chat', '--trust-all-tools', '--agent', '...']).
@@ -116,16 +130,15 @@ class WorkerPool:
 
         self._tmux_session = server.new_session(
             session_name=self.tmux_session_name,
-            window_name="lead",
+            window_name="orch",
             start_directory=str(self.project_root),
         )
 
         lead_pane = self._tmux_session.active_window.active_pane
         # Quote properly so multi-word args / prompts survive
         lead_pane.send_keys(" ".join(shlex.quote(p) for p in lead_pane_cmd), enter=True)
+        self._lead_pane_id = getattr(lead_pane, "pane_id", None)
 
-        # A second window for workers — keeps the lead's pane uncluttered.
-        self._tmux_session.new_window(window_name="workers", attach=False)
         return self._tmux_session
 
     @property
@@ -214,15 +227,44 @@ class WorkerPool:
         pass_criteria: str = "",
         extra_context: str = "",
     ) -> Worker:
-        """Create a tmux pane + git worktree, launch the worker agent."""
+        """Create a tmux pane + git worktree, launch the worker agent.
+
+        Idempotent on (session_id, task, perspective, agent_name): a
+        re-spawn for the same triple within a session returns the
+        previously-created worker instead of doubling up.  Powers
+        --resume.
+        """
         if not perspectives.is_valid(perspective):
             raise ValueError(f"unknown perspective {perspective!r}")
         if self._tmux_session is None:
             raise RuntimeError("worker pool not started — call start_session() first")
 
+        # Idempotency key: a hash of the inputs the supervisor controls.
+        key_blob = "\x00".join([
+            self.orch_session_id, perspective, agent.get("name", ""), task,
+            "\x01".join(file_scope or []),
+        ])
+        idem_key = "spawn:" + hashlib.sha256(key_blob.encode()).hexdigest()[:16]
+        op_id, prior = await self.store.begin_op(
+            self.orch_session_id, "spawn_worker", idem_key,
+            {"task": task[:500], "perspective": perspective,
+             "agent": agent.get("name"), "file_scope": file_scope or []},
+        )
+        if prior is not None and prior.get("worker_id") in self._workers:
+            # Already spawned in this process AND we still hold the
+            # in-memory Worker — return it as-is.
+            return self._workers[prior["worker_id"]]
+
         wid = self._next_worker_id()
         wt_name = f"{perspective}-{wid}"
         worktree, branch = self._create_worktree(wt_name)
+
+        # Optionally enrich extra_context with retrieved memories + matching skills.
+        memory_context = await self._fetch_memory_context(task)
+        skills_context = self._fetch_skills_context(task, file_scope or [])
+        merged_extra = "\n\n".join(
+            c for c in (skills_context, memory_context, extra_context) if c
+        )
 
         # Build the system prompt + task in one blob, write to file
         prompt = perspectives.system_prompt(
@@ -230,32 +272,44 @@ class WorkerPool:
             task=task,
             file_scope=file_scope or [],
             pass_criteria=pass_criteria,
-            extra_context=extra_context,
+            extra_context=merged_extra,
         )
         prompt_dir = Path(worktree) / ".orch"
         prompt_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = str(prompt_dir / f"prompt_{wid}.txt")
         Path(prompt_path).write_text(prompt)
 
-        # Create a tmux pane in the workers window. The window starts with
-        # one default (empty) pane — claim that for our first worker;
-        # split off new panes for subsequent workers.
-        workers_window = next(
-            (w for w in self._tmux_session.windows if w.window_name == "workers"),
+        # All panes live in a single "orch" window so the lead (pane 0)
+        # stays visible at the top while workers tile below it.
+        orch_window = next(
+            (w for w in self._tmux_session.windows if w.window_name == "orch"),
             self._tmux_session.active_window,
         )
-        existing_panes = list(workers_window.panes or [])
-        if len(self._workers) == 0 and len(existing_panes) == 1:
-            pane = existing_panes[0]
+        existing_panes = list(orch_window.panes or [])
+        if len(self._workers) == 0 and len(existing_panes) <= 1:
+            # First worker: split below the lead so we don't kill its pane.
+            pane = orch_window.split(direction="down", attach=False)
         else:
+            # Subsequent workers: split the BOTTOM pane (the most recent
+            # worker), so the lead at the top keeps its full width.
             try:
-                pane = workers_window.split(direction="down", attach=False)
+                target = existing_panes[-1] if existing_panes else None
+                if target is not None and hasattr(target, "split"):
+                    pane = target.split(direction="down", attach=False)
+                else:
+                    pane = orch_window.split(direction="down", attach=False)
             except Exception:
-                pane = workers_window.split(attach=False)
+                pane = orch_window.split(attach=False)
         try:
-            workers_window.select_layout("tiled")
+            # "main-horizontal" keeps the first pane (lead) tall on top
+            # and tiles workers below — better than "even-vertical" which
+            # shrinks the lead as workers grow.
+            orch_window.select_layout("main-horizontal")
         except Exception:
-            pass
+            try:
+                orch_window.select_layout("tiled")
+            except Exception:
+                pass
 
         # cd to worktree, banner, then launch agent
         pane.send_keys(f"cd {shlex.quote(worktree)}", enter=True)
@@ -281,12 +335,65 @@ class WorkerPool:
         )
         self._workers[wid] = worker
         await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+        if op_id is not None:
+            await self.store.finish_op(
+                op_id,
+                {"worker_id": wid, "worktree": worktree, "branch": branch},
+            )
         return worker
 
     def get(self, worker_id: str) -> Worker:
         if worker_id not in self._workers:
             raise KeyError(f"unknown worker {worker_id}")
         return self._workers[worker_id]
+
+    async def _fetch_memory_context(self, task: str) -> str:
+        """Retrieve the top relevant memories for `task` and format them
+        as a stable, deterministic block for the cacheable prefix.
+
+        Returns "" when no memory federation is wired up or when nothing
+        relevant comes back — in which case the worker's prompt is
+        unchanged.
+
+        Research notes (kind='research') get special-cased: their stored
+        body is a JSON envelope; we re-render it as compact markdown so
+        the worker sees the actual sources and snippets, not raw JSON.
+        """
+        if self.memory is None:
+            return ""
+        try:
+            hits = await self.memory.retrieve(task, k=3)
+        except Exception:
+            return ""
+        if not hits:
+            return ""
+        parts = ["## Retrieved memories"]
+        for h in hits:
+            parts.append(h.header())
+            body = h.body
+            if h.kind == "research":
+                rendered = _render_research_hit(body)
+                if rendered:
+                    body = rendered
+            # Cap each note so the prompt budget stays bounded.
+            parts.append(body[:800] if h.kind == "research" else body[:600])
+        return "\n\n".join(parts)
+
+    def _fetch_skills_context(self, task: str, file_scope: list[str]) -> str:
+        """Render the bodies of all skills whose triggers match this task.
+
+        Skills land in the cacheable prefix alongside memories so any
+        repeat call within the cache TTL costs only 10% on input tokens.
+        """
+        if self.skills is None:
+            return ""
+        try:
+            matched = self.skills.matching(task, file_scope)
+            if not matched:
+                return ""
+            return self.skills.render(matched)
+        except Exception:
+            return ""
 
     def list(self) -> list[Worker]:
         return list(self._workers.values())
@@ -357,10 +464,15 @@ class WorkerPool:
                 await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
                 return state, summary
             await asyncio.sleep(poll_interval)
-        # Timeout: leave worker running but report it
-        return "timeout", "no completion sentinel within timeout"
+        # Timeout: leave worker running but record the timeout against the row
+        worker = self.get(worker_id)
+        worker.state = "timeout"
+        worker.summary = "no completion sentinel within timeout"
+        worker.finished_at = time.time()
+        await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+        return "timeout", worker.summary
 
-    def kill_worker(self, worker_id: str) -> None:
+    async def kill_worker(self, worker_id: str) -> None:
         worker = self.get(worker_id)
         if worker.pane is not None:
             try:
@@ -370,7 +482,9 @@ class WorkerPool:
             except Exception:
                 pass
         worker.state = "killed"
+        worker.summary = worker.summary or "killed by supervisor"
         worker.finished_at = time.time()
+        await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
 
     # ── teardown ──────────────────────────────────────────────────────
 
@@ -417,3 +531,38 @@ def worker_to_row(w: Worker) -> dict:
         "started_at": w.started_at,
         "finished_at": w.finished_at,
     }
+
+
+def _render_research_hit(body: str) -> str:
+    """Convert a research-note body (cache header + JSON) back to the
+    compact markdown form ResearchPayload.render_markdown() produces.
+
+    Returns "" if the body doesn't look like a research envelope.
+    """
+    import json as _json
+    import re as _re
+
+    m = _re.search(r"```json\s*\n(.*?)\n```", body, _re.DOTALL)
+    if not m:
+        return ""
+    try:
+        payload_dict = _json.loads(m.group(1))
+    except _json.JSONDecodeError:
+        return ""
+    try:
+        from research import ResearchPayload, SearchResult
+    except ImportError:
+        return ""
+    try:
+        results = [SearchResult(**r) for r in payload_dict.get("results", [])]
+        payload = ResearchPayload(
+            query=payload_dict.get("query", ""),
+            fetched_at=float(payload_dict.get("fetched_at") or 0.0),
+            results=results,
+            fetched_bodies=dict(payload_dict.get("fetched_bodies") or {}),
+            error=payload_dict.get("error"),
+        )
+    except (TypeError, ValueError):
+        return ""
+    # Tighten body sizes for the prompt budget.
+    return payload.render_markdown(max_chars_per_body=600)

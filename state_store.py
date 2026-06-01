@@ -14,14 +14,23 @@ import aiosqlite
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path.home() / ".orch" / "state.db"
+DB_PATH = Path.home() / ".orch" / "state.db"  # legacy default; overridden by paths.state_db_path()
+
+
+def _default_db_path() -> Path:
+    """Resolve the default DB path lazily so tests / non-default XDG_DATA_HOME work."""
+    try:
+        from paths import state_db_path
+        return state_db_path()
+    except Exception:
+        return DB_PATH
 
 
 class StateStore:
     """Async SQLite state store for session/task persistence and checkpointing."""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = Path(db_path) if db_path else DB_PATH
+        self.db_path = Path(db_path) if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db: Optional[aiosqlite.Connection] = None
 
@@ -91,11 +100,31 @@ class StateStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
 
+            -- Durable execution log: append-only record of every side
+            -- effect the supervisor performs.  Used by `orch resume`
+            -- to skip ops whose idempotency_key already produced a
+            -- stored result.
+            CREATE TABLE IF NOT EXISTS op_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                kind TEXT NOT NULL,          -- spawn_worker | send_message | kill_worker | verify | ...
+                idempotency_key TEXT NOT NULL,
+                args_json TEXT,
+                result_json TEXT,
+                state TEXT DEFAULT 'pending', -- pending | done | failed
+                created_at REAL NOT NULL,
+                completed_at REAL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                UNIQUE (session_id, idempotency_key)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(session_id, status);
             CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);
             CREATE INDEX IF NOT EXISTS idx_workers_session ON workers(session_id);
             CREATE INDEX IF NOT EXISTS idx_workers_state ON workers(session_id, state);
+            CREATE INDEX IF NOT EXISTS idx_oplog_session ON op_log(session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_oplog_state ON op_log(session_id, state);
         """)
         await self._db.commit()
 
@@ -445,3 +474,99 @@ class StateStore:
             )
             await self._db.commit()
         return n
+
+    # ── Durable execution log (Phase-2) ──────────────────────────────
+
+    async def begin_op(
+        self, session_id: str, kind: str, idempotency_key: str, args: dict
+    ) -> tuple[int | None, dict | None]:
+        """Begin (or look up) a side-effecting operation.
+
+        Returns (op_id, prior_result):
+          - prior_result is the cached result_json dict if this
+            (session_id, idempotency_key) already completed successfully —
+            in that case the caller MUST skip the underlying work and
+            return prior_result. op_id is None.
+          - Otherwise op_id is a newly-inserted log row id and prior_result
+            is None; the caller performs the work and calls finish_op.
+
+        This gives us at-most-once execution under crash + replay.
+        """
+        # Fast path: completed op?
+        async with self._db.execute(
+            "SELECT id, state, result_json FROM op_log "
+            "WHERE session_id = ? AND idempotency_key = ?",
+            (session_id, idempotency_key),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            existing_id, state, result_json = row
+            if state == "done" and result_json:
+                try:
+                    return None, json.loads(result_json)
+                except json.JSONDecodeError:
+                    return None, None
+            # Failed or still-pending: caller decides; we hand back the row id
+            # so they can retry against it instead of inserting a duplicate.
+            return existing_id, None
+
+        # Insert a new pending row.
+        now = time.time()
+        async with self._db.execute(
+            "INSERT INTO op_log (session_id, kind, idempotency_key, args_json, "
+            "state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+            (session_id, kind, idempotency_key, json.dumps(args), now),
+        ) as cur:
+            op_id = cur.lastrowid
+        await self._db.commit()
+        return op_id, None
+
+    async def finish_op(self, op_id: int, result: dict, *, state: str = "done") -> None:
+        """Mark an op finished.  state is 'done' or 'failed'."""
+        await self._db.execute(
+            "UPDATE op_log SET state = ?, result_json = ?, completed_at = ? "
+            "WHERE id = ?",
+            (state, json.dumps(result), time.time(), op_id),
+        )
+        await self._db.commit()
+
+    async def get_pending_ops(self, session_id: str) -> list[dict]:
+        """Fetch any ops still in 'pending' (i.e. crashed mid-execution).
+
+        Used by `orch resume` to decide what to retry.
+        """
+        async with self._db.execute(
+            "SELECT id, kind, idempotency_key, args_json, created_at "
+            "FROM op_log WHERE session_id = ? AND state = 'pending' "
+            "ORDER BY created_at",
+            (session_id,),
+        ) as cur:
+            return [
+                {
+                    "id": r[0],
+                    "kind": r[1],
+                    "idempotency_key": r[2],
+                    "args": json.loads(r[3]) if r[3] else {},
+                    "created_at": r[4],
+                }
+                async for r in cur
+            ]
+
+    async def get_op_log(self, session_id: str, *, limit: int = 200) -> list[dict]:
+        """Recent op log for the dashboard / debugging."""
+        async with self._db.execute(
+            "SELECT id, kind, idempotency_key, state, args_json, result_json, "
+            "created_at, completed_at FROM op_log WHERE session_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (session_id, limit),
+        ) as cur:
+            out: list[dict] = []
+            async for r in cur:
+                out.append({
+                    "id": r[0], "kind": r[1], "idempotency_key": r[2],
+                    "state": r[3],
+                    "args": json.loads(r[4]) if r[4] else {},
+                    "result": json.loads(r[5]) if r[5] else None,
+                    "created_at": r[6], "completed_at": r[7],
+                })
+            return out

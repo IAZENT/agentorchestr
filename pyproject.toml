@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orch"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero-cost agent orchestrator over any installed CLI coding agent"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "ORCH contributors" }]
 keywords = ["agents", "orchestration", "llm", "tmux", "mcp"]
 classifiers = [
@@ -30,44 +30,51 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.20"]
-search = ["ddgs>=9.0"]
-ollama = []  # Ollama is HTTP-only via httpx — no Python pkg required
-test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+mcp      = ["mcp>=1.20"]
+discover = ["zeroconf>=0.140"]
+memory   = ["sqlite-vec>=0.1.6", "fastembed>=0.4"]
+research = ["ddgs>=9.0"]
+test     = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "mcp>=1.20",
+    "zeroconf>=0.140",
+    "sqlite-vec>=0.1.6",
+    "fastembed>=0.4",
     "ddgs>=9.0",
 ]
 
 [project.scripts]
-orch = "orchestrator:_sync_main"
+orch      = "orchestrator:_sync_main"
+orch-shim = "orch_shim:main"
 
 [project.urls]
-Homepage = "https://github.com/you/orch"
+Homepage      = "https://github.com/you/orch"
 Documentation = "https://github.com/you/orch#readme"
 
 [tool.setuptools]
+# Real top-level modules only.  Files listed here MUST exist on disk.
 py-modules = [
     "orchestrator",
+    "supervisor",
+    "worker_pool",
+    "perspectives",
     "agent_detector",
     "router",
     "state_store",
-    "session_manager",
-    "goal_decomposer",
-    "scheduler",
-    "quality_gate",
     "monitor",
     "context_manager",
     "hooks",
     "mcp_bridge",
-    "web_search",
+    "orch_shim",
+    "discovery",
+    "research",
 ]
 
 [tool.setuptools.packages.find]
-include = ["agents*", "dashboard*"]
+include = ["agents*", "dashboard*", "memory*", "skills*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths    = ["tests"]

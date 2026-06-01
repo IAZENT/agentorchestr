@@ -33,60 +33,39 @@ from worker_pool import WorkerPool
 SUPERVISOR_PROMPT_TEMPLATE = """\
 You are the SUPERVISOR for an ORCH multi-agent coding session.
 
-THE GOAL (from the user):
+Your tools are exposed via the MCP server "orch" — list them with
+list_tools() if you forget. Key capabilities you should know about:
+  • spawn_worker(perspective=…) where perspective is one of
+    {{implementer, tester, reviewer, security, performance,
+      verifier, researcher}}
+  • verify(...) MUST run the FULL test suite before mark_goal_done
+  • web_research(query) hits a 24h cache; spawn a 'researcher' worker
+    for deeper multi-source synthesis
+  • discover_running_agents() finds agents the user opened in other
+    terminals so you can dispatch to them without cold-start
+  • compact_session() / clear_tool_results() if your context fills up
+  • mark_goal_done(summary) | mark_goal_failed(reason) to finish
+
+OPERATING PRINCIPLES:
+  1. Decompose CONTEXT-centrically, not problem-centrically. One worker
+     that builds + tests beats four workers that hand off.
+  2. Effort scaling: simple → 1 impl + verify. Moderate → +1 reviewer.
+     Complex → 2–3 parallel implementers (cap 4) + reviewer + verify.
+  3. RESEARCH BEFORE BUILDING for anything time-sensitive (library
+     versions, recent specs, external APIs). Cached results carry into
+     the implementer worker for free.
+  4. ALWAYS verify() with the full suite before mark_goal_done.
+  5. If a worker reports WORKER_BLOCKED, read the tail and either
+     send_to_worker(fix) or spawn a different perspective. Don't loop.
+  6. Keep YOUR messages short — your own tokens compound across turns.
+
+START: read the goal below, plan in 2–3 sentences, then act. Don't ask
+for clarification unless the goal is undecidable; assume sensible
+defaults.
+
+────────────────────────────────────────────────────────────
+GOAL:
 {goal}
-
-YOUR TOOL SURFACE (MCP server "orch"):
-  spawn_worker(task, perspective, file_scope?, agent_hint?)
-      Launches a worker agent in its own tmux pane + git worktree.
-      Perspectives: implementer, tester, reviewer, security,
-                    performance, verifier.
-  read_worker_output(worker_id, tail_lines?)   - inspect a pane
-  send_to_worker(worker_id, message)            - follow-up instruction
-  wait_for_worker(worker_id, timeout_s?)        - block until WORKER_DONE
-  list_workers()                                - all workers + states
-  kill_worker(worker_id)                        - terminate a worker
-  cross_review(worker_a, worker_b, focus?)      - peer review
-  verify(file_scope, success_criteria, ...)     - run FULL test suite
-  report_progress(message)                      - visible in dashboard
-  mark_goal_done(summary)                       - finish successfully
-  mark_goal_failed(reason)                      - cannot achieve goal
-
-OPERATING PRINCIPLES (Anthropic + AWS CAO + arXiv 2511.16708):
-  1. Decompose the goal CONTEXT-CENTRICALLY, not problem-centrically.
-     A worker that builds a feature should also write its tests; do
-     not split planner/implementer/tester/reviewer if they share most
-     of the same context. Split only when context is genuinely
-     independent (different modules, different domains).
-  2. Effort scaling:
-       - simple change       -> 1 implementer + verify()
-       - moderate change     -> 1 implementer + 1 reviewer + verify()
-       - complex change      -> 2-3 parallel implementers on independent
-                                modules, then a security/performance
-                                reviewer, then verify()
-     Cap at 4 parallel workers unless the goal genuinely cannot be
-     decomposed below that.
-  3. ALWAYS run verify() before mark_goal_done. The verifier MUST run
-     the FULL test suite — never accept partial test runs.
-  4. If a worker reports WORKER_BLOCKED, read its output and either
-     send_to_worker with a corrective instruction OR spawn a different
-     worker with a different perspective. Do not loop forever.
-  5. Token budget: keep your own messages short. Read only the tail of
-     a worker's pane unless you genuinely need more.
-  6. When unsure between two implementations, run them in parallel
-     workers and use cross_review() to choose.
-
-RESULT PROTOCOL:
-  When everything is satisfied AND the verifier passed, call
-  mark_goal_done with a one-paragraph summary.
-  If you've concluded the goal cannot be achieved (missing tools,
-  ambiguous requirements, repeated failures), call mark_goal_failed
-  with a clear reason.
-
-START NOW. Begin by analyzing the goal in 2-3 sentences, then call
-list_perspectives() if you want a refresher, then spawn your first
-worker. Do not ask the user for clarification unless the goal is
-literally undecidable; assume reasonable defaults.
 """
 
 
@@ -131,6 +110,8 @@ class Supervisor:
         session_id: str,
         host: str = "127.0.0.1",
         port: int | None = None,
+        memory: object | None = None,
+        skills: object | None = None,
     ):
         self.project_root = Path(project_root)
         self.goal = goal
@@ -140,7 +121,12 @@ class Supervisor:
         self.session_id = session_id
         self.host = host
         self.port = port or _free_port()
-        self.pool = WorkerPool(str(self.project_root), session_id, store)
+        self.memory = memory
+        self.skills = skills
+        self.pool = WorkerPool(
+            str(self.project_root), session_id, store,
+            memory=memory, skills=skills,
+        )
         self._goal_future: asyncio.Future | None = None
         self._mcp_app = None
         self._mcp_task: asyncio.Task | None = None
@@ -176,13 +162,24 @@ class Supervisor:
             on_goal_failed=self._on_goal_failed,
             host=self.host,
             port=self.port,
+            memory=self.memory,
         )
 
         # 2. Write MCP client config so the lead agent finds the bridge
         write_mcp_config(self.port, transport="sse")
 
         # 3. Compose the supervisor's first user message
-        prompt = SUPERVISOR_PROMPT_TEMPLATE.format(goal=self.goal.strip())
+        memory_preamble = ""
+        if self.memory is not None:
+            try:
+                memory_preamble = await self.memory.load_static_context()
+            except Exception:
+                memory_preamble = ""
+        body = SUPERVISOR_PROMPT_TEMPLATE.format(goal=self.goal.strip())
+        if memory_preamble:
+            prompt = memory_preamble + "\n\n---\n\n" + body
+        else:
+            prompt = body
         prompt_dir = Path(f"/tmp/orch-{self.session_id}")
         prompt_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = prompt_dir / "supervisor_prompt.txt"
@@ -194,10 +191,16 @@ class Supervisor:
         # 5. Run the MCP server in this loop until the goal future fires
         self._mcp_task = asyncio.create_task(self._mcp_app.run_sse_async())
 
+        # Defaults so a failure inside the future / finally never leaks an
+        # UnboundLocalError out to orchestrator.main().
+        state: str = "failed"
+        summary: str = "supervisor never reached completion"
         try:
             state, summary = await self._goal_future
         except asyncio.CancelledError:
             state, summary = "cancelled", "supervisor task cancelled"
+        except Exception as e:  # noqa: BLE001
+            state, summary = "failed", f"{type(e).__name__}: {e}"
         finally:
             self._mcp_task.cancel()
             try:

@@ -56,7 +56,14 @@ _HTML = """<!doctype html>
   <div class="sub">live-refreshing every 5s · <a href="/api/sessions">json</a></div>
   <table id="t">
     <thead>
-      <tr><th>id</th><th>status</th><th>goal</th><th>tasks done/total</th><th>updated</th></tr>
+      <tr>
+        <th>id</th>
+        <th>status</th>
+        <th>goal</th>
+        <th>workers (done/run/total)</th>
+        <th>tasks (done/total)</th>
+        <th>updated</th>
+      </tr>
     </thead>
     <tbody></tbody>
   </table>
@@ -69,11 +76,14 @@ async function refresh() {
   for (const s of data.sessions) {
     const tr = document.createElement('tr');
     const updated = s.updated_at ? new Date(s.updated_at * 1000).toLocaleString() : '';
+    const workers = `${s.workers_done}/${s.workers_running}/${s.workers_total}`;
+    const tasks   = `${s.done}/${s.total}`;
     tr.innerHTML = `
       <td><a href="/api/sessions/${s.id}">${s.id}</a></td>
       <td><span class="status-${s.status}">${s.status}</span></td>
-      <td>${(s.goal || '').slice(0, 90)}</td>
-      <td>${s.done}/${s.total}</td>
+      <td>${(s.goal || '').slice(0, 80)}</td>
+      <td>${workers}</td>
+      <td>${tasks}</td>
       <td>${updated}</td>`;
     tbody.appendChild(tr);
   }
@@ -98,7 +108,7 @@ def build_app(store: StateStore) -> FastAPI:
 
     @app.get("/api/sessions")
     async def list_sessions() -> JSONResponse:
-        # Aggregate: pull all session rows + per-session task counts.
+        # Aggregate: pull all session rows + per-session task and worker counts.
         if store._db is None:
             return JSONResponse({"sessions": []})
         sessions: list[dict] = []
@@ -108,15 +118,23 @@ def build_app(store: StateStore) -> FastAPI:
             async for row in cur:
                 sid = row[0]
                 results = await store.get_results(sid)
-                done = sum(1 for r in results if r["status"] == "done")
+                workers = await store.get_workers(sid)
+                done_t = sum(1 for r in results if r["status"] == "done")
+                done_w = sum(1 for w in workers if w["state"] == "done")
+                running_w = sum(1 for w in workers if w["state"] in ("starting", "running"))
                 sessions.append({
                     "id": sid,
                     "goal": row[1],
                     "status": row[2],
                     "created_at": row[3],
                     "updated_at": row[4],
+                    # Legacy task counts (may be 0 in supervisor-driven runs)
                     "total": len(results),
-                    "done": done,
+                    "done": done_t,
+                    # Live worker counts (the supervisor flow uses this)
+                    "workers_total": len(workers),
+                    "workers_done": done_w,
+                    "workers_running": running_w,
                 })
         return JSONResponse({"sessions": sessions})
 
@@ -127,15 +145,26 @@ def build_app(store: StateStore) -> FastAPI:
             raise HTTPException(404, f"session {session_id} not found")
         ledger = await store.get_task_ledger(session_id)
         results = await store.get_results(session_id)
+        workers = await store.get_workers(session_id)
         return JSONResponse({
             "session": session,
             "task_ledger": ledger,
             "tasks": results,
+            "workers": workers,
         })
 
     @app.get("/api/sessions/{session_id}/tasks")
     async def session_tasks(session_id: str) -> JSONResponse:
         return JSONResponse({"tasks": await store.get_results(session_id)})
+
+    @app.get("/api/sessions/{session_id}/workers")
+    async def session_workers(session_id: str) -> JSONResponse:
+        """List all workers (and their states) for a session.
+
+        This is the live-path equivalent of /tasks — the supervisor-driven
+        flow stores its execution units in the workers table, not tasks.
+        """
+        return JSONResponse({"workers": await store.get_workers(session_id)})
 
     return app
 

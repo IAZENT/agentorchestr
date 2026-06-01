@@ -242,7 +242,7 @@ Completed tasks:
         if relevant_memories:
             parts.append(f"## Relevant Memories\n{relevant_memories[:500]}")
 
-        # Web research context (if enriched by web_search module)
+        # Web research context (set by future enrichment hooks)
         research = task.get("_research_context", "")
         if research:
             parts.append(research)

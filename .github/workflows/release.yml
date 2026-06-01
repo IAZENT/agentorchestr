@@ -1,0 +1,87 @@
+name: release
+
+# Triggered by pushing an annotated tag like v0.3.0.
+# Builds wheel + sdist, publishes to PyPI via trusted publishing (OIDC,
+# no API token required — set up the publisher at
+# https://pypi.org/manage/account/publishing/ first), then creates a
+# GitHub Release with the built artifacts attached.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      - name: Build wheel + sdist
+        run: python -m build
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/orch
+    permissions:
+      id-token: write   # OIDC token for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Pull the section for this tag from CHANGELOG.md if it exists,
+          # otherwise emit a placeholder so the release page is non-empty.
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ -f CHANGELOG.md ]; then
+            awk -v tag="$TAG" '
+              $0 ~ "^## \\[" tag "\\]" { found=1; print; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}." > release-notes.md
+          fi
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: release-notes.md
+          generate_release_notes: true

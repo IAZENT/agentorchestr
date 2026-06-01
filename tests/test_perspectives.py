@@ -6,7 +6,8 @@ import perspectives
 
 def test_known_perspectives_are_valid():
     names = perspectives.perspective_names()
-    assert {"implementer", "tester", "reviewer", "security", "performance", "verifier"} <= set(names)
+    assert {"implementer", "tester", "reviewer", "security", "performance",
+            "verifier", "researcher"} <= set(names)
 
 
 def test_invalid_perspective_raises():
@@ -60,3 +61,16 @@ def test_verifier_demands_full_test_run():
 def test_reviewer_is_readonly_by_default():
     assert perspectives.READONLY_HINTS["reviewer"] == ["*"]
     assert perspectives.READONLY_HINTS["implementer"] == []
+
+
+def test_researcher_prompt_advertises_web_research_tool():
+    """The researcher must know about ORCH's MCP web_research tool —
+    that's the cache-aware path. Native agent web tools are a fallback."""
+    p = perspectives.system_prompt("researcher", task="find latest fastapi version")
+    assert "Role: RESEARCHER" in p
+    assert "web_research" in p
+    assert "WORKER_DONE" in p
+
+
+def test_researcher_is_readonly():
+    assert perspectives.READONLY_HINTS["researcher"] == ["*"]

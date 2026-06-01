@@ -61,6 +61,7 @@ def build_supervisor_app(
     on_goal_failed=None,
     host: str = "127.0.0.1",
     port: int = 8765,
+    memory: object | None = None,
 ):
     """Construct a FastMCP server bound to a live WorkerPool.
 
@@ -69,6 +70,7 @@ def build_supervisor_app(
     `default_worker_agent`: fallback when the supervisor doesn't specify.
     `on_goal_done`/`on_goal_failed`: async callbacks the orchestrator
         installs to be notified when the supervisor finishes.
+    `memory`: optional MemoryFederation; enables cache-aware web_research.
     """
     if not MCP_AVAILABLE:
         raise ImportError(
@@ -92,15 +94,7 @@ def build_supervisor_app(
         extra_context: str = "",
         agent_hint: str | None = None,
     ) -> str:
-        """Launch a worker in a new tmux pane + git worktree.
-
-        perspective: one of {implementer, tester, reviewer, security,
-                              performance, verifier}.
-        file_scope:  paths the worker should restrict edits to.
-        agent_hint:  preferred CLI agent name; falls back to default.
-        Returns a JSON string with worker_id and the user-facing tmux
-        attach command.
-        """
+        """Launch a worker (tmux pane + git worktree). perspective ∈ {implementer, tester, reviewer, security, performance, verifier, researcher}."""
         if not perspectives.is_valid(perspective):
             return json.dumps({
                 "error": f"unknown perspective {perspective!r}",
@@ -134,8 +128,7 @@ def build_supervisor_app(
 
     @mcp.tool()
     def send_to_worker(worker_id: str, message: str) -> str:
-        """Type a follow-up instruction into a running worker's pane.
-        Useful for 'fix this bug' / 'try a different approach' loops."""
+        """Send a follow-up instruction into a running worker's pane."""
         try:
             pool.send_message(worker_id, message)
             return json.dumps({"sent": True, "worker_id": worker_id})
@@ -144,8 +137,7 @@ def build_supervisor_app(
 
     @mcp.tool()
     async def wait_for_worker(worker_id: str, timeout_s: int = 300) -> str:
-        """Block until the worker writes WORKER_DONE / WORKER_BLOCKED /
-        WORKER_FAILED on its last line, or until timeout."""
+        """Block until the worker writes WORKER_DONE/BLOCKED/FAILED, or timeout."""
         try:
             state, summary = await pool.wait_until_done(
                 worker_id, timeout=float(timeout_s)
@@ -173,9 +165,10 @@ def build_supervisor_app(
         return json.dumps(out)
 
     @mcp.tool()
-    def kill_worker(worker_id: str) -> str:
+    async def kill_worker(worker_id: str) -> str:
+        """Terminate a worker (SIGTERM, then SIGKILL fallback)."""
         try:
-            pool.kill_worker(worker_id)
+            await pool.kill_worker(worker_id)
             return json.dumps({"killed": True, "worker_id": worker_id})
         except KeyError as e:
             return json.dumps({"killed": False, "error": str(e)})
@@ -186,12 +179,7 @@ def build_supervisor_app(
         worker_b: str,
         focus: str = "correctness",
     ) -> str:
-        """Have worker A review worker B's diff and vice-versa.
-
-        Implementation: send a focused review prompt to each worker's
-        pane referring to the other's worktree. Returns a JSON object
-        with both reviews (their tail output after the review).
-        """
+        """Have worker A review B's diff and vice-versa. Non-blocking."""
         try:
             wa, wb = pool.get(worker_a), pool.get(worker_b)
         except KeyError as e:
@@ -220,12 +208,7 @@ def build_supervisor_app(
         success_criteria: str = "all tests pass, no lint errors",
         agent_hint: str | None = None,
     ) -> str:
-        """Spawn a verifier subagent that runs the FULL test suite.
-
-        Implements Anthropic's 'verification subagent' pattern with the
-        explicit 'no shortcuts' instruction. Blocks until the verifier
-        produces WORKER_DONE / WORKER_FAILED.
-        """
+        """Spawn a verifier subagent that runs the FULL test suite. Blocking, 600s timeout."""
         agent = _resolve_agent(agent_hint)
         verifier = await pool.spawn_worker(
             task=(
@@ -256,15 +239,14 @@ def build_supervisor_app(
 
     @mcp.tool()
     async def mark_goal_done(summary: str) -> str:
-        """Tell the orchestrator the supervisor is finished successfully.
-        Triggers run shutdown."""
+        """Signal goal completion to the orchestrator. Triggers run shutdown."""
         if on_goal_done is not None:
             await on_goal_done(summary)
         return json.dumps({"acknowledged": True, "state": "done"})
 
     @mcp.tool()
     async def mark_goal_failed(reason: str) -> str:
-        """Tell the orchestrator the supervisor cannot achieve the goal."""
+        """Signal that the goal cannot be achieved. Triggers run shutdown."""
         if on_goal_failed is not None:
             await on_goal_failed(reason)
         return json.dumps({"acknowledged": True, "state": "failed"})
@@ -273,6 +255,118 @@ def build_supervisor_app(
     def list_perspectives() -> str:
         """Names of valid worker perspectives."""
         return json.dumps(perspectives.perspective_names())
+
+    @mcp.tool()
+    async def discover_running_agents(include_tmux: bool = True,
+                                       mdns_timeout: float = 1.0) -> str:
+        """Find CLI agents already running on this host (mDNS + fs cards + tmux scan)."""
+        from discovery import discover  # local import keeps mcp_bridge cheap
+        agents = await discover(mdns_timeout=mdns_timeout, include_tmux=include_tmux)
+        return json.dumps([a.to_dict() for a in agents])
+
+    @mcp.tool()
+    async def send_to_external_agent(agent_id: str, text: str) -> str:
+        """Send input to a shim-wrapped discovered agent (transport='shim_socket' only)."""
+        from discovery import discover, ShimClient
+        agents = await discover(include_tmux=False)
+        match = next((a for a in agents if a.id == agent_id), None)
+        if not match or not match.socket:
+            return json.dumps({"sent": False, "error": f"agent {agent_id!r} not found or no socket"})
+        client = ShimClient(match.socket)
+        result = await client.send(text)
+        return json.dumps({"agent_id": agent_id, **result})
+
+    @mcp.tool()
+    async def read_from_external_agent(agent_id: str, max_bytes: int = 4096) -> str:
+        """Capture recent output from a shim-wrapped discovered agent."""
+        from discovery import discover, ShimClient
+        agents = await discover(include_tmux=False)
+        match = next((a for a in agents if a.id == agent_id), None)
+        if not match or not match.socket:
+            return json.dumps({"output": "", "error": f"agent {agent_id!r} not found or no socket"})
+        client = ShimClient(match.socket)
+        result = await client.read(max_bytes=max_bytes)
+        return json.dumps({"agent_id": agent_id, **result})
+
+    @mcp.tool()
+    async def web_research(query: str, max_results: int = 5,
+                            fetch_top_n: int = 2,
+                            force_refresh: bool = False,
+                            ttl_hours: float = 24.0) -> str:
+        """DuckDuckGo search + body fetch. 24h cache; auto-persists into project memory."""
+        from research import research as _do_research
+        if not query or not query.strip():
+            return json.dumps({"error": "empty query"})
+
+        # 1. Cache hit?
+        if memory is not None and not force_refresh:
+            try:
+                cached = await memory.get_cached_research(query)
+            except Exception:
+                cached = None
+            if cached is not None:
+                return json.dumps({**cached, "cached": True})
+
+        # 2. Live search.
+        payload = await _do_research(query, k=max_results, fetch_top_n=fetch_top_n)
+        payload_dict = payload.to_dict()
+
+        # 3. Persist for next time.
+        if memory is not None and payload.results:
+            try:
+                await memory.cache_research(query, payload_dict, ttl_hours=ttl_hours)
+            except Exception:
+                pass
+
+        return json.dumps({**payload_dict, "cached": False})
+
+    @mcp.tool()
+    async def compact_session(keep_last_n: int = 3,
+                               include_running: bool = False) -> str:
+        """Rewrite older finished workers' summaries as short stubs to keep the context window below 70%."""
+        rows = await pool.store.get_workers(pool.orch_session_id)
+        # Order: oldest first.
+        rows.sort(key=lambda r: r.get("started_at") or 0.0)
+        finished = [
+            r for r in rows
+            if include_running or r.get("state") in ("done", "failed", "killed", "blocked", "timeout")
+        ]
+        # Keep the most recent keep_last_n out of compaction.
+        if keep_last_n > 0:
+            finished = finished[:-keep_last_n] if len(finished) > keep_last_n else []
+
+        compacted_count = 0
+        for r in finished:
+            old_summary = (r.get("summary") or "").strip()
+            if old_summary.startswith("[compacted]"):
+                continue  # already compacted
+            new_summary = f"[compacted] {r.get('perspective','?')}/{r.get('state','?')} — " + (
+                (old_summary[:120] + "…") if len(old_summary) > 120 else old_summary
+            )
+            r2 = dict(r)
+            r2["summary"] = new_summary
+            await pool.store.upsert_worker(pool.orch_session_id, r2)
+            compacted_count += 1
+
+        return json.dumps({
+            "compacted": compacted_count,
+            "kept_recent": min(keep_last_n, len(rows)),
+            "total_workers": len(rows),
+        })
+
+    @mcp.tool()
+    def clear_tool_results(progress_log: bool = True) -> str:
+        """Truncate /tmp/orch-<session>/progress.log to drop noise from the next iteration."""
+        cleared: list[str] = []
+        if progress_log:
+            log = Path(f"/tmp/orch-{pool.orch_session_id}/progress.log")
+            if log.exists():
+                try:
+                    log.write_text("")  # truncate
+                    cleared.append(str(log))
+                except OSError as e:
+                    return json.dumps({"cleared": cleared, "error": str(e)})
+        return json.dumps({"cleared": cleared})
 
     return mcp
 

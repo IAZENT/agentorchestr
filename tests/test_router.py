@@ -14,8 +14,8 @@ from router import LLMRouter, _RateLimited
 @pytest.fixture
 def clear_env(monkeypatch):
     """Strip every provider env var so tests start from a clean slate."""
-    for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
-              "OPENROUTER_API_KEY", "OLLAMA_HOST"):
+    for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY",
+              "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_HOST"):
         monkeypatch.delenv(k, raising=False)
     yield
 
@@ -100,55 +100,100 @@ async def test_all_providers_failing_raises(monkeypatch, clear_env):
 
 
 @pytest.mark.asyncio
-async def test_ollama_is_opt_in_by_default(monkeypatch, clear_env):
-    """A running Ollama server should NOT be auto-added to providers
-    unless the user explicitly opts in via use_ollama=True."""
-    def responder(request):
-        # Pretend Ollama is up and healthy at localhost:11434
-        if request.url.path == "/api/tags":
-            return httpx.Response(200, json={"models": [{"name": "llama3.1"}]})
-        return httpx.Response(404)
-
-    r = LLMRouter()  # use_ollama defaults to False
-    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
-    await r.init()
-    assert not any(p["name"] == "ollama" for p in r.providers), \
-        "Ollama must be opt-in to avoid silent slow-fallback surprises"
-    await r.close()
-
-
-@pytest.mark.asyncio
-async def test_ollama_added_when_explicitly_enabled(monkeypatch, clear_env):
-    """Pass use_ollama=True to opt in."""
-    def responder(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/tags":
-            return httpx.Response(200, json={"models": [{"name": "x"}]})
-        if request.url.path == "/api/chat":
-            return httpx.Response(200, json={"message": {"role": "assistant", "content": "yo"}})
-        return httpx.Response(404)
-
-    r = LLMRouter(use_ollama=True)
-    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
-    await r.init()
-    assert any(p["name"] == "ollama" for p in r.providers)
-    out = await r.compress("hi")
-    assert out == "yo"
-    await r.close()
-
-
-@pytest.mark.asyncio
-async def test_ollama_host_env_alone_does_not_opt_in(monkeypatch, clear_env):
-    """Setting OLLAMA_HOST is NOT enough — only the use_ollama flag enables it."""
+async def test_ollama_is_no_longer_a_provider(monkeypatch, clear_env):
+    """Local-LLM support has been removed.  Even if OLLAMA_HOST is set,
+    the router must NOT instantiate any ollama provider."""
     monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
-    monkeypatch.setenv("ORCH_USE_OLLAMA", "1")  # still ignored
-
-    def responder(request):
-        if request.url.path == "/api/tags":
-            return httpx.Response(200, json={"models": []})
-        return httpx.Response(404)
-
-    r = LLMRouter()  # use_ollama=False by default
-    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
+    r = LLMRouter()
+    r._client = httpx.AsyncClient(transport=_mock_transport(lambda req: httpx.Response(404)))
     await r.init()
     assert not any(p["name"] == "ollama" for p in r.providers)
+    # The PROVIDERS list itself must no longer mention ollama.
+    from router import PROVIDERS
+    assert not any(p["name"] == "ollama" for p in PROVIDERS)
+    await r.close()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_call_marks_system_prompt_cacheable(monkeypatch, clear_env):
+    """When ANTHROPIC_API_KEY is set, the router uses the native messages
+    endpoint and tags the system prompt with cache_control={type:ephemeral}.
+    Saves ~90% on input tokens for repeated supervisor/worker calls."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    captured: dict = {}
+    def responder(request):
+        if "anthropic.com" in request.url.host:
+            import json as _json
+            captured["payload"] = _json.loads(request.content.decode())
+            captured["headers"] = dict(request.headers)
+            return httpx.Response(200, json={
+                "content": [{"type": "text", "text": "hello-claude"}],
+            })
+        return httpx.Response(404)
+
+    r = LLMRouter()
+    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
+    await r.init()
+    out = await r.compress("hi")
+    assert out == "hello-claude"
+    assert r.active_provider == "anthropic"
+    # The system prompt MUST arrive as a list of blocks with cache_control.
+    sys_field = captured["payload"]["system"]
+    assert isinstance(sys_field, list)
+    assert sys_field[0]["cache_control"] == {"type": "ephemeral"}
+    # Anthropic auth header
+    assert captured["headers"].get("x-api-key") == "sk-test"
+    assert captured["headers"].get("anthropic-version") == "2023-06-01"
+    await r.close()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_marks_system_prompt_cacheable(monkeypatch, clear_env):
+    """OpenRouter forwards cache_control to Anthropic models — keep it on."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+
+    captured: dict = {}
+    def responder(request):
+        if "openrouter.ai" in request.url.host:
+            import json as _json
+            captured["payload"] = _json.loads(request.content.decode())
+            return httpx.Response(200, json={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            })
+        return httpx.Response(404)
+
+    r = LLMRouter()
+    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
+    await r.init()
+    out = await r.compress("hi")
+    assert out == "ok"
+    # System content should be a list-of-blocks form, not a bare string.
+    sys_field = captured["payload"]["messages"][0]["content"]
+    assert isinstance(sys_field, list)
+    assert sys_field[0]["cache_control"] == {"type": "ephemeral"}
+    await r.close()
+
+
+@pytest.mark.asyncio
+async def test_groq_does_not_mark_cache_control(monkeypatch, clear_env):
+    """Groq doesn't support cache_control — system must stay a plain string."""
+    monkeypatch.setenv("GROQ_API_KEY", "gk-test")
+
+    captured: dict = {}
+    def responder(request):
+        if "groq.com" in request.url.host:
+            import json as _json
+            captured["payload"] = _json.loads(request.content.decode())
+            return httpx.Response(200, json={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            })
+        return httpx.Response(404)
+
+    r = LLMRouter()
+    r._client = httpx.AsyncClient(transport=_mock_transport(responder))
+    await r.init()
+    await r.compress("hi")
+    sys_field = captured["payload"]["messages"][0]["content"]
+    assert isinstance(sys_field, str), "Groq must receive system as a plain string"
     await r.close()

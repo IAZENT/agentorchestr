@@ -43,11 +43,11 @@ EXTRAS = {
 }
 
 ENV_VARS = {
-    "GEMINI_API_KEY":    ("https://ai.google.dev",          "Free: 1500 req/day on Gemini 2.5 Flash"),
-    "GROQ_API_KEY":      ("https://console.groq.com",       "Free: 30 RPM on Llama 70B"),
-    "CEREBRAS_API_KEY":  ("https://inference.cerebras.ai",  "Free: 1M tokens/day on Llama 70B"),
-    "OPENROUTER_API_KEY":("https://openrouter.ai",          "Free: 28+ models including DeepSeek R1"),
-    "OLLAMA_HOST":       ("http://localhost:11434",         "Optional: local Ollama server URL"),
+    "ANTHROPIC_API_KEY":  ("https://console.anthropic.com",     "Paid: 90% off cached prefix tokens"),
+    "GEMINI_API_KEY":     ("https://ai.google.dev",             "Free: 1500 req/day on Gemini 2.5 Flash"),
+    "GROQ_API_KEY":       ("https://console.groq.com",          "Free: 30 RPM on Llama 70B"),
+    "CEREBRAS_API_KEY":   ("https://inference.cerebras.ai",     "Free: 1M tokens/day on Llama 70B"),
+    "OPENROUTER_API_KEY": ("https://openrouter.ai",             "Free: 28+ models including DeepSeek R1"),
 }
 
 AGENTS = {
@@ -96,7 +96,7 @@ def pip_install(packages: list[str], force_system: bool) -> None:
 
 def check_env_vars() -> list[str]:
     print("\n── LLM Backends ────────────────────────────────")
-    print("ORCH needs at least one free LLM key OR a local Ollama server.\n")
+    print("ORCH needs at least one hosted LLM API key.\n")
     configured = []
     for key, (url, note) in ENV_VARS.items():
         val = os.environ.get(key)
@@ -107,9 +107,9 @@ def check_env_vars() -> list[str]:
             print(f"  ✗ {key:<20} — {note}")
             print(f"      → {url}")
     if not configured:
-        print("\n⚠  No LLM keys found. Set at least one in your shell:")
-        print("   export GEMINI_API_KEY=...")
-        print("   (Or run a local Ollama: `ollama serve` + `ollama pull llama3.1`)\n")
+        print("\n⚠  No LLM keys found. Set at least one in your shell, e.g.:")
+        print("   export ANTHROPIC_API_KEY=...     (best caching support)")
+        print("   export CEREBRAS_API_KEY=...      (fastest free tier)\n")
     return configured
 
 
@@ -119,20 +119,6 @@ def check_tmux() -> None:
     else:
         print("⚠  tmux not found. ORCH will use subprocess mode (no visual splits).")
         print("   Install: brew install tmux  OR  sudo apt install tmux")
-
-
-def check_ollama() -> None:
-    if not shutil.which("ollama"):
-        return
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    try:
-        import urllib.request
-        with urllib.request.urlopen(f"{host}/api/tags", timeout=2) as r:
-            data = r.read().decode()
-        if '"models"' in data:
-            print(f"✓ Ollama running at {host}")
-    except Exception:
-        print("ℹ  Ollama binary present but no server detected (run: ollama serve)")
 
 
 def check_agents() -> list[str]:
@@ -180,25 +166,22 @@ def main() -> int:
             return 1
 
     configured = check_env_vars()
-    check_ollama()
     print()
     found_agents = check_agents()
     print()
     check_tmux()
 
     print("\n═══════════════════════════════════════")
-    if found_agents and (configured or shutil.which("ollama")):
-        print(f"✓ Ready. {len(found_agents)} agent(s), "
-              f"{len(configured)} LLM key(s)"
-              f"{' + Ollama' if shutil.which('ollama') else ''}.")
+    if found_agents and configured:
+        print(f"✓ Ready. {len(found_agents)} agent(s), {len(configured)} LLM key(s).")
         print("\nQuick start:")
         print("  python orchestrator.py --detect")
         print('  python orchestrator.py --goal "Build a REST API for user auth"')
     else:
         if not found_agents:
             print("⚠  Install at least one CLI agent.")
-        if not configured and not shutil.which("ollama"):
-            print("⚠  Configure at least one LLM key or run Ollama locally.")
+        if not configured:
+            print("⚠  Configure at least one hosted LLM API key.")
     print("═══════════════════════════════════════")
     return 0
 

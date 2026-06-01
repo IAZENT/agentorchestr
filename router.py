@@ -1,20 +1,35 @@
 """
 router.py
 ==========
-Zero-cost LLM router for orchestration intelligence.
+LLM router for ORCH orchestration intelligence.
 
-Provider priority (all free, no credit card required):
-  1. Google Gemini AI Studio  — 1500 req/day, Gemini 2.5 Flash
-  2. Cerebras                 — 1M tokens/day on Llama 3.1 70B
-  3. Groq                     — 30 RPM on Llama 70B (315 tokens/sec)
-  4. OpenRouter               — 28+ free models including DeepSeek R1
-  5. Ollama (local)           — fully offline fallback (no quota at all)
+Provider priority (the first one with credentials wins; rest are fallbacks):
+  1. Anthropic direct         — paid, but cache reads cost 10% of input price
+                                (set ANTHROPIC_API_KEY to enable)
+  2. Cerebras                 — 1M tokens/day free on Llama 3.1 70B (~2100 tok/s)
+  3. Groq                     — 30 RPM free on Llama 70B (~315 tok/s)
+  4. Google Gemini AI Studio  — 1500 req/day free, 1M-token context
+  5. OpenRouter               — 28+ free models including DeepSeek R1
+                                (forwards cache_control to Anthropic-shaped models)
+
+Token efficiency:
+  Providers that support Anthropic's prompt-caching protocol
+  (anthropic, openrouter -> claude-* models) get cache_control={type:ephemeral}
+  on the system prompt automatically. This costs 1.25x base price on first
+  write and 10% (90% off) on every subsequent read within the 5-min TTL.
+  Anthropic engineering blog: ~80% of multi-agent perf variance is explained
+  by token usage, so this is the single highest-leverage optimization.
 
 Resilience:
   - Sequential fallback on any error.
   - Rate-limit awareness: HTTP 429 / quota errors put a provider on
     cooldown (default 60s) so we stop hammering it.
   - Each call records `last_provider`, `last_latency_ms`.
+
+Note: ORCH no longer ships an Ollama / local-LLM fallback.  Local models
+were too slow for the orchestration latency budget — every supervisor
+turn pays the cost.  Stick to the hosted free tiers above; they're all
+sub-second to first token.
 """
 
 from __future__ import annotations
@@ -29,31 +44,44 @@ import httpx
 
 PROVIDERS = [
     {
-        "name": "gemini",
-        "env": "GEMINI_API_KEY",
-        "limit": "1500 req/day free",
-        "model_plan": "gemini-2.5-flash",
-        "model_compress": "gemini-2.5-flash",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-        "type": "gemini",
+        "name": "anthropic",
+        "env": "ANTHROPIC_API_KEY",
+        "limit": "paid — cache hits 90% off (5m TTL) or 90% off + 2x write (1h TTL)",
+        "model_plan": os.environ.get("ANTHROPIC_PLAN_MODEL", "claude-sonnet-4-5"),
+        "model_compress": os.environ.get("ANTHROPIC_COMPRESS_MODEL", "claude-haiku-4-5"),
+        "url": "https://api.anthropic.com/v1/messages",
+        "type": "anthropic",
+        "cache_control": True,
     },
     {
         "name": "cerebras",
         "env": "CEREBRAS_API_KEY",
-        "limit": "1M tokens/day free",
+        "limit": "1M tokens/day free (~2100 tok/s)",
         "model_plan": "llama3.1-70b",
         "model_compress": "llama3.1-8b",
         "url": "https://api.cerebras.ai/v1/chat/completions",
         "type": "openai_compat",
+        "cache_control": False,
     },
     {
         "name": "groq",
         "env": "GROQ_API_KEY",
-        "limit": "30 RPM free",
+        "limit": "30 RPM free (~315 tok/s)",
         "model_plan": "llama-3.3-70b-versatile",
         "model_compress": "llama-3.1-8b-instant",
         "url": "https://api.groq.com/openai/v1/chat/completions",
         "type": "openai_compat",
+        "cache_control": False,
+    },
+    {
+        "name": "gemini",
+        "env": "GEMINI_API_KEY",
+        "limit": "1500 req/day free, 1M-token context",
+        "model_plan": "gemini-2.5-flash",
+        "model_compress": "gemini-2.5-flash",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+        "type": "gemini",
+        "cache_control": False,
     },
     {
         "name": "openrouter",
@@ -63,15 +91,9 @@ PROVIDERS = [
         "model_compress": "meta-llama/llama-3.1-8b-instruct:free",
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "type": "openai_compat",
-    },
-    {
-        "name": "ollama",
-        "env": None,  # Detected via HTTP probe, not API key
-        "limit": "local — unlimited",
-        "model_plan": os.environ.get("OLLAMA_PLAN_MODEL", "llama3.1:latest"),
-        "model_compress": os.environ.get("OLLAMA_COMPRESS_MODEL", "llama3.1:latest"),
-        "url": (os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip("/") + "/api/chat",
-        "type": "ollama",
+        # OpenRouter forwards cache_control to Anthropic-shaped models, but
+        # silently ignores it for others — safe to always include.
+        "cache_control": True,
     },
 ]
 
@@ -119,48 +141,25 @@ class _RateLimited(Exception):
 
 
 class LLMRouter:
-    """Routes LLM calls across free providers with automatic fallback
-    and rate-limit awareness.
+    """Routes LLM calls across hosted free providers with automatic fallback
+    and rate-limit awareness.  No local-LLM fallback — see module docstring."""
 
-    Ollama is OFF by default. Pass `use_ollama=True` (typically from the
-    orchestrator's `--use-ollama` CLI flag) to include a running local
-    Ollama server in the fallback chain. Environment variables alone do
-    NOT enable it — explicit user intent is required.
-    """
-
-    def __init__(self, cooldown_s: float = DEFAULT_COOLDOWN_S, *, use_ollama: bool = False):
+    def __init__(self, cooldown_s: float = DEFAULT_COOLDOWN_S):
         self.providers: list[dict] = []
         self.active_provider: Optional[str] = None
         self.last_latency_ms: int = 0
         self._client = httpx.AsyncClient(timeout=60.0)
         self._cooldown_s = cooldown_s
         self._cooldowns: dict[str, float] = {}  # provider name -> available_at epoch
-        self._use_ollama = bool(use_ollama)
 
     async def init(self) -> None:
         """Probe all providers and build priority list from available ones."""
         for p in PROVIDERS:
-            if p["type"] == "ollama":
-                if not self._use_ollama:
-                    continue  # opt-in only
-                if await self._ollama_alive(p["url"]):
-                    self.providers.append({**p, "_key": ""})
-                continue
             key = os.environ.get(p["env"]) if p["env"] else None
             if key:
                 self.providers.append({**p, "_key": key})
-
         if self.providers:
             self.active_provider = self.providers[0]["name"]
-
-    async def _ollama_alive(self, chat_url: str) -> bool:
-        """Quick probe: hit /api/tags to confirm the local server responds."""
-        base = chat_url.replace("/api/chat", "")
-        try:
-            r = await self._client.get(f"{base}/api/tags", timeout=2.0)
-            return r.status_code == 200
-        except Exception:
-            return False
 
     def has_any_free(self) -> bool:
         return len(self.providers) > 0
@@ -223,12 +222,12 @@ class LLMRouter:
         model = provider[model_key]
         ptype = provider["type"]
 
+        if ptype == "anthropic":
+            return await self._call_anthropic(provider, prompt, system, model)
         if ptype == "gemini":
             return await self._call_gemini(provider, prompt, system, model)
         if ptype == "openai_compat":
             return await self._call_openai_compat(provider, prompt, system, model)
-        if ptype == "ollama":
-            return await self._call_ollama(provider, prompt, system, model)
         raise ValueError(f"Unknown provider type: {ptype}")
 
     @staticmethod
@@ -245,6 +244,44 @@ class LLMRouter:
         if m:
             return float(m.group(1))
         return DEFAULT_COOLDOWN_S
+
+    async def _call_anthropic(self, provider: dict, prompt: str, system: str, model: str) -> str:
+        """Anthropic Messages API with prompt-cache breakpoint on the system prompt.
+
+        cache_control={"type":"ephemeral"} flags the system block as cacheable —
+        on subsequent calls within the TTL (5 min default, 1h with header)
+        Anthropic charges 10% of input price for the cached prefix tokens.
+        See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+        """
+        headers = {
+            "x-api-key": provider["_key"],
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "max_tokens": 2048,
+            "temperature": 0.1,
+            # System is a list of blocks so we can mark the whole thing cacheable.
+            "system": [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        r = await self._client.post(provider["url"], json=payload, headers=headers)
+        if r.status_code == 429:
+            raise _RateLimited(provider["name"], self._retry_after(r))
+        r.raise_for_status()
+        data = r.json()
+        try:
+            # content is a list of {type: "text", text: "..."} blocks
+            return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
+        except (KeyError, TypeError) as e:
+            raise RuntimeError(f"Unexpected Anthropic response shape: {data}") from e
 
     async def _call_gemini(self, provider: dict, prompt: str, system: str, model: str) -> str:
         url = provider["url"].format(model=model, key=provider["_key"])
@@ -265,10 +302,19 @@ class LLMRouter:
 
     async def _call_openai_compat(self, provider: dict, prompt: str, system: str, model: str) -> str:
         headers = {"Authorization": f"Bearer {provider['_key']}", "Content-Type": "application/json"}
+        # When the provider supports cache_control (e.g. OpenRouter -> Anthropic
+        # models), put it on the system prompt as an array of content blocks.
+        # Providers that don't understand the field will silently drop it.
+        if provider.get("cache_control"):
+            system_content: object = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+            ]
+        else:
+            system_content = system
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": prompt},
             ],
             "max_tokens": 2048,
@@ -279,27 +325,6 @@ class LLMRouter:
             raise _RateLimited(provider["name"], self._retry_after(r))
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
-
-    async def _call_ollama(self, provider: dict, prompt: str, system: str, model: str) -> str:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            "stream": False,
-            "options": {"temperature": 0.1, "num_ctx": 8192},
-        }
-        # Ollama can take a while on first model load — give it a bigger budget.
-        r = await self._client.post(provider["url"], json=payload, timeout=180.0)
-        r.raise_for_status()
-        data = r.json()
-        # /api/chat returns {"message": {"role":"assistant","content":"..."}}
-        try:
-            return data["message"]["content"]
-        except KeyError:
-            # Some older builds use /api/generate shape
-            return data.get("response", "")
 
     async def close(self) -> None:
         await self._client.aclose()

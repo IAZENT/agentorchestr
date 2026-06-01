@@ -23,7 +23,6 @@ Other:
   --list-sessions    show recent sessions (resumable ones flagged)
   --resume <id>      pick up a crashed session
   --dashboard        launch the FastAPI dashboard (http://localhost:3000)
-  --use-ollama       include local Ollama in LLM router (off by default)
 """
 
 from __future__ import annotations
@@ -41,7 +40,6 @@ from rich.console import Console
 from rich.panel import Panel
 
 from agent_detector import AgentDetector
-from agents.agent_registry import AgentRegistry
 from hooks import HookManager
 from router import LLMRouter
 from state_store import StateStore
@@ -137,7 +135,7 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
 
 
 def _resolve_agents(
-    args, available: list[dict], registry: AgentRegistry
+    args, available: list[dict]
 ) -> tuple[list[dict], dict | None]:
     """Map CLI args to (workers, lead). Falls back to interactive picker."""
     if args.agents:
@@ -171,21 +169,79 @@ def _resolve_agents(
     return _interactive_pick(available)
 
 
+# Anthropic prompt-cache write surcharge starts to bite past ~8KB.
+# Beyond that we still work, just nag the user so they know they're paying.
+_GOAL_WARN_BYTES = 8 * 1024
+# Hard cap so a runaway paste can't blow up the prompt prefix.
+_GOAL_HARD_CAP = 64 * 1024
+
+
 def _read_goal(args) -> str:
+    """Resolve the goal text from --goal / --goal-file / interactive paste.
+
+    Order of precedence:
+      1. --goal-file <path>   reads the file as-is (UTF-8).
+      2. --goal "..."         single-line / quick goal.
+      3. --interactive        multi-line paste mode; terminator: a line
+                              containing only "/end" OR a blank line
+                              after another blank line (Enter Enter).
+                              The "/end" sentinel is preferred for
+                              file-pastes that may contain blank lines.
+    """
+    if getattr(args, "goal_file", None):
+        path = Path(args.goal_file).expanduser()
+        if not path.exists():
+            console.print(f"[red]✗ --goal-file {path} not found[/red]")
+            return ""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            console.print(f"[red]✗ --goal-file {path} is not UTF-8[/red]")
+            return ""
+        return _check_goal_size(text.strip(), source=str(path))
+
     if args.goal:
-        return args.goal.strip()
+        return _check_goal_size(args.goal.strip(), source="--goal")
+
     if args.interactive:
         console.print(
-            "[cyan]Enter your goal (multi-line; press Enter twice to submit):[/cyan]"
+            "[cyan]Enter your goal — paste freely. End with [bold]/end[/bold] on its "
+            "own line, or press Enter twice on a blank line.[/cyan]"
         )
         lines: list[str] = []
-        while True:
-            line = input()
-            if line == "" and lines and lines[-1] == "":
-                break
-            lines.append(line)
-        return "\n".join(lines).strip()
+        try:
+            while True:
+                line = input()
+                stripped = line.strip()
+                if stripped == "/end":
+                    break
+                if line == "" and lines and lines[-1] == "":
+                    break
+                lines.append(line)
+        except EOFError:
+            pass  # Ctrl-D also ends paste cleanly.
+        return _check_goal_size("\n".join(lines).strip(), source="paste")
+
     return ""
+
+
+def _check_goal_size(text: str, *, source: str) -> str:
+    n = len(text.encode("utf-8"))
+    if n > _GOAL_HARD_CAP:
+        console.print(
+            f"[red]✗ goal from {source} is {n//1024}KB > "
+            f"{_GOAL_HARD_CAP//1024}KB hard cap. Trim it or break into "
+            f"phases.[/red]"
+        )
+        return text[: _GOAL_HARD_CAP]
+    if n > _GOAL_WARN_BYTES:
+        console.print(
+            f"[yellow]⚠ goal is {n//1024}KB > {_GOAL_WARN_BYTES//1024}KB. "
+            f"Past this size you pay the prompt-cache write surcharge on "
+            f"every call. Consider moving long context into PROJECT.md "
+            f"so it lands in the cacheable per-project tier instead.[/yellow]"
+        )
+    return text
 
 
 def _print_detection(available: list[dict], llm: LLMRouter) -> None:
@@ -217,6 +273,33 @@ def _print_detection(available: list[dict], llm: LLMRouter) -> None:
             "auto mode runs entirely on the agents' own auth.[/dim]"
         )
 
+    # Surface the optional-but-required-for-auto-mode dependencies.
+    console.print("\n[bold cyan]═══ ORCH dependencies ═══[/bold cyan]")
+    from mcp_bridge import MCP_AVAILABLE
+    try:
+        import zeroconf  # noqa: F401
+        zc_ok = True
+    except ImportError:
+        zc_ok = False
+    try:
+        import ddgs  # noqa: F401
+        ddgs_ok = True
+    except ImportError:
+        ddgs_ok = False
+    rows = [
+        ("mcp", MCP_AVAILABLE, "REQUIRED for auto mode (lead<->ORCH bridge)",
+         "pip install 'mcp>=1.20'"),
+        ("zeroconf", zc_ok, "optional: cross-terminal agent discovery",
+         "pip install 'zeroconf>=0.140'"),
+        ("ddgs", ddgs_ok, "optional: web research via DuckDuckGo",
+         "pip install 'ddgs>=9.0'"),
+    ]
+    for name, ok, why, how in rows:
+        mark = "[green]✓[/green]" if ok else "[yellow]✗[/yellow]"
+        console.print(f"  {mark} {name:<10} [dim]{why}[/dim]")
+        if not ok:
+            console.print(f"      [dim]→ {how}[/dim]")
+
 
 async def _print_session_list(store: StateStore) -> None:
     from datetime import datetime
@@ -242,6 +325,120 @@ async def _print_session_list(store: StateStore) -> None:
         "\n[dim]Resume an unfinished session: "
         "[cyan]python orchestrator.py --resume <id>[/cyan][/dim]"
     )
+
+
+def _handle_skill_subcommand(reg, args) -> int:
+    """Dispatch the --skill-* flags. Returns the process exit code."""
+    reg.reload()
+    if args.skill_list:
+        skills = reg.all()
+        if not skills:
+            console.print("[dim]No skills installed.  Try --skill-add <git-url>[/dim]")
+            return 0
+        console.print("\n[bold cyan]═══ Installed skills ═══[/bold cyan]")
+        for s in skills:
+            sig = "[green]signed[/green]" if s.manifest.has_signature else "[yellow]unsigned[/yellow]"
+            triggers = ", ".join(s.manifest.keywords[:5]) or "(no keywords)"
+            console.print(
+                f"  [cyan]{s.name:<30}[/cyan] v{s.manifest.version:<10} {sig}  "
+                f"[dim]{triggers}[/dim]"
+            )
+        return 0
+
+    if args.skill_add:
+        try:
+            skill = reg.add_from_git(args.skill_add)
+        except (FileExistsError, RuntimeError, ValueError) as e:
+            console.print(f"[red]✗ {e}[/red]")
+            return 1
+        console.print(
+            f"[green]✓[/green] installed [cyan]{skill.name}[/cyan] "
+            f"v{skill.manifest.version} from {args.skill_add}"
+        )
+        return 0
+
+    if args.skill_remove:
+        if reg.remove(args.skill_remove):
+            console.print(f"[green]✓[/green] removed [cyan]{args.skill_remove}[/cyan]")
+            return 0
+        console.print(f"[red]✗ skill {args.skill_remove!r} not installed[/red]")
+        return 1
+
+    if args.skill_verify:
+        info = reg.verify(args.skill_verify)
+        if info["ok"]:
+            kind = "signed" if info["signed"] else "unsigned"
+            console.print(
+                f"[green]✓[/green] {args.skill_verify} verified ({kind})"
+            )
+            return 0
+        console.print(f"[red]✗ {args.skill_verify}: {info['error']}[/red]")
+        return 1
+    return 0
+
+
+async def _heartbeat_loop(store: "StateStore", session_id: str,
+                          stop_event: asyncio.Event,
+                          *, interval: float = 5.0) -> None:
+    """Print a one-line worker status summary every `interval` seconds.
+
+    Runs alongside Supervisor.run() so the user can see progress even
+    when watching the parent terminal (rather than tmux).  Stops when
+    `stop_event` is set or the loop is cancelled.  Only emits when the
+    counts or last-summary change, so an idle supervisor stays quiet.
+    """
+    last_signature: tuple = ()
+    while not stop_event.is_set():
+        try:
+            workers = await store.get_workers(session_id)
+        except Exception:
+            workers = []
+        counts: dict[str, int] = {}
+        last_summary = ""
+        last_id = ""
+        for w in workers:
+            st = w.get("state") or "unknown"
+            counts[st] = counts.get(st, 0) + 1
+            if w.get("summary"):
+                last_summary = w["summary"]
+                last_id = w.get("worker_id") or ""
+        signature = (tuple(sorted(counts.items())), last_summary[:80])
+        if workers and signature != last_signature:
+            last_signature = signature
+            from datetime import datetime
+            ts = datetime.now().strftime("%H:%M:%S")
+            counts_str = "  ".join(
+                f"{k}={v}" for k, v in sorted(counts.items())
+            ) or "(no workers yet)"
+            tail = f"  | last: {last_id} {last_summary[:80]}" if last_summary else ""
+            console.print(
+                f"[dim]\\[{ts}] orch {session_id}  • {counts_str}{tail}[/dim]"
+            )
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            continue
+
+
+def _should_auto_attach() -> bool:
+    """True when ORCH should spawn / switch a terminal to view tmux by default.
+
+    Mirrors the logic of `_attach_to_tmux` so we don't try to spawn a
+    terminal ORCH can't actually use:
+      * Already inside tmux  → True (we'll just `tmux switch-client`).
+      * stdin isn't a TTY    → False (probably scripted run).
+      * No terminal emulator → False (would silently fail).
+    """
+    import shutil as _sh
+    if os.environ.get("TMUX"):
+        return True
+    if not sys.stdin.isatty():
+        return False
+    for term in ("kitty", "alacritty", "wezterm",
+                 "gnome-terminal", "konsole", "xterm"):
+        if _sh.which(term):
+            return True
+    return False
 
 
 def _attach_to_tmux(session_name: str) -> None:
@@ -282,6 +479,9 @@ async def main() -> int:
         epilog=__doc__,
     )
     parser.add_argument("--goal", type=str, help="Goal for AUTO mode (supervisor + workers)")
+    parser.add_argument("--goal-file", type=str,
+                        help="Read the goal from a file (UTF-8). Useful for "
+                             "long multi-paragraph goals or design docs.")
     parser.add_argument("--task", type=str, help="Task for MANUAL mode (single agent)")
     parser.add_argument("--manual", action="store_true",
                         help="Manual mode: one agent on one task, no supervisor")
@@ -299,12 +499,35 @@ async def main() -> int:
                         help="Launch the FastAPI dashboard and exit")
     parser.add_argument("--interactive", action="store_true",
                         help="Prompt for goal + agents at startup")
-    parser.add_argument("--attach", action="store_true",
-                        help="Open a new terminal and tmux-attach after startup")
-    parser.add_argument("--use-ollama", action="store_true",
-                        help="Include local Ollama in the legacy LLM router")
+    parser.add_argument("--attach", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Open a new terminal and tmux-attach after startup. "
+                             "Default: auto (attach when stdin is a TTY and a "
+                             "terminal emulator is available). Use --no-attach "
+                             "to keep the current terminal.")
     parser.add_argument("--no-tmux-cleanup", action="store_true",
                         help="Keep tmux session alive after run (default)")
+
+    # Skill marketplace subcommands.  All optional; if --skill-* isn't
+    # passed we just behave as before.  Kept as flags (not subparsers)
+    # so combining with --detect / --list-sessions stays simple.
+    parser.add_argument("--skill-list", action="store_true",
+                        help="List installed skills and exit")
+    parser.add_argument("--skill-add", metavar="GIT_URL",
+                        help="git-clone a skill into ~/.orch/skills and exit")
+    parser.add_argument("--skill-remove", metavar="NAME",
+                        help="Uninstall a skill by name and exit")
+    parser.add_argument("--skill-verify", metavar="NAME",
+                        help="Verify a skill's signature and exit")
+    parser.add_argument("--require-signed-skills", action="store_true",
+                        help="Refuse to load any skill without a valid ed25519 signature")
+    parser.add_argument("--init", action="store_true",
+                        help="Scaffold .orch/ files in the current project "
+                             "(PROJECT.md, CONVENTIONS.md, hooks.json, "
+                             "memory/{topics,episodes,research}/, skills/) "
+                             "and append .gitignore patterns. Idempotent.")
+    parser.add_argument("--init-force", action="store_true",
+                        help="With --init: overwrite existing scaffolded files.")
     args = parser.parse_args()
 
     console.print(BANNER)
@@ -314,7 +537,7 @@ async def main() -> int:
 
     detector = AgentDetector()
     available = detector.detect()
-    llm = LLMRouter(use_ollama=args.use_ollama)
+    llm = LLMRouter()
     await llm.init()
 
     if args.detect:
@@ -324,6 +547,33 @@ async def main() -> int:
     if args.list_sessions:
         await _print_session_list(store)
         await llm.close(); await store.close(); return 0
+
+    # Skill subcommands — exit after handling.
+    if args.skill_list or args.skill_add or args.skill_remove or args.skill_verify:
+        from skills import SkillRegistry
+        reg = SkillRegistry(require_signature=args.require_signed_skills)
+        rc = _handle_skill_subcommand(reg, args)
+        await llm.close(); await store.close()
+        return rc
+
+    # `orch --init` scaffolds the per-project layout, then exits.
+    if args.init:
+        from paths import init_project
+        actions = init_project(args.project, force=args.init_force)
+        console.print(f"\n[bold cyan]ORCH project init at {args.project}[/bold cyan]")
+        for path, action in actions.items():
+            color = {
+                "created": "green", "appended": "green",
+                "kept": "dim", "overwrote": "yellow",
+            }.get(action, "white")
+            console.print(f"  [{color}]{action:<10}[/{color}] {path}")
+        console.print(
+            "\n[dim]Edit PROJECT.md and CONVENTIONS.md to teach ORCH about "
+            "this project — they're auto-loaded into the cacheable preamble "
+            "of every session.[/dim]"
+        )
+        await llm.close(); await store.close()
+        return 0
 
     if args.dashboard:
         from dashboard.server import start_dashboard
@@ -370,13 +620,12 @@ async def main() -> int:
 
     if not goal:
         console.print(
-            "[yellow]No goal provided. Use --goal '...', --interactive, or --manual.[/yellow]"
+            "[yellow]No goal provided. Use --goal '...', --goal-file <path>, --interactive, or --manual.[/yellow]"
         )
         await llm.close(); await store.close(); return 0
 
     # Pick agents + lead
-    registry = AgentRegistry(available)
-    workers, lead = _resolve_agents(args, available, registry)
+    workers, lead = _resolve_agents(args, available)
     if not workers or lead is None:
         await llm.close(); await store.close(); return 1
 
@@ -398,6 +647,49 @@ async def main() -> int:
         "lead": lead["name"], "workers": [a["name"] for a in workers],
     })
 
+    # Memory federation: optional, no hard dep.  If sqlite-vec/fastembed are
+    # missing it falls back to FTS5 + recency only — still a meaningful win.
+    memory = None
+    try:
+        from memory import MemoryFederation
+        memory = MemoryFederation(args.project)
+        await memory.init()
+    except Exception as e:  # pragma: no cover - tolerate missing optional deps
+        console.print(f"[dim]memory federation unavailable: {e}[/dim]")
+        memory = None
+
+    # Skills: optional, never blocks the run.  --require-signed-skills
+    # makes us refuse to load anything unsigned.
+    skills_reg = None
+    try:
+        from skills import SkillRegistry
+        skills_reg = SkillRegistry(require_signature=args.require_signed_skills)
+        skills_reg.reload()
+        if skills_reg.all():
+            console.print(
+                f"[dim]loaded {len(skills_reg.all())} skill(s) from "
+                f"{skills_reg.skills_dir}[/dim]"
+            )
+    except Exception as e:  # pragma: no cover
+        console.print(f"[dim]skills registry unavailable: {e}[/dim]")
+        skills_reg = None
+
+    # Auto mode hard-requires the `mcp` library because the lead agent
+    # talks to ORCH over MCP/SSE.  Fail BEFORE we spin up tmux + worktrees.
+    from mcp_bridge import MCP_AVAILABLE
+    if not MCP_AVAILABLE:
+        console.print(Panel(
+            "[red]The `mcp` Python library is not installed.[/red]\n"
+            "ORCH's auto mode needs it so the lead agent can call back via\n"
+            "MCP/SSE. Install it into your venv:\n\n"
+            "  [cyan].env/bin/pip install 'mcp>=1.20'[/cyan]\n"
+            "  (or:  [cyan]python bootstrap.py --with-mcp[/cyan])\n\n"
+            "If you only want to drive a single agent without MCP, use\n"
+            "  [cyan]python orchestrator.py --manual --task '...'[/cyan]",
+            title="[red]missing dependency[/red]", border_style="red",
+        ))
+        await llm.close(); await store.close(); return 1
+
     sup = Supervisor(
         project_root=args.project,
         goal=goal,
@@ -405,6 +697,8 @@ async def main() -> int:
         worker_agents=workers,
         store=store,
         session_id=session_id,
+        memory=memory,
+        skills=skills_reg,
     )
 
     console.print(Panel(
@@ -412,21 +706,55 @@ async def main() -> int:
         f"[bold]tmux:[/bold]       [cyan]{sup.attach_command}[/cyan]\n"
         f"[bold]MCP:[/bold]        http://{sup.host}:{sup.port}/sse\n"
         f"[bold]dashboard:[/bold]  http://localhost:3000  (run --dashboard)\n"
-        f"[dim]The supervisor is now running. It will spawn workers as it sees fit. "
-        f"Attach to tmux to watch.[/dim]",
+        f"\n"
+        f"[bold]Next:[/bold]\n"
+        f"  • Lead agent at the top; worker panes tile below — all in one view.\n"
+        f"  • [cyan]Ctrl-B then D[/cyan] inside tmux detaches you without killing it.\n"
+        f"  • [cyan]Ctrl-C[/cyan] in [italic]this[/italic] terminal cancels the whole session.\n"
+        f"  • Run [cyan]python orchestrator.py --resume {session_id}[/cyan] to pick up "
+        f"if you stop now.\n"
+        f"[dim]Heartbeat below; full status panel when the goal completes.[/dim]",
         title="[green]auto mode running[/green]", border_style="green",
     ))
 
-    if args.attach:
+    # --attach defaults to None ("auto"); --no-attach forces False.
+    want_attach = (
+        _should_auto_attach() if args.attach is None else args.attach
+    )
+    if want_attach:
         _attach_to_tmux(sup.pool.tmux_session_name)
+        # Inside tmux we just switch-client; outside tmux a new terminal
+        # was opened. Either way the parent terminal stays free for the
+        # heartbeat ticker / final summary panel.
 
+    # Defaults so the `finally` clause and the closing Panel always have
+    # valid values, even if sup.run() raises before its first assignment.
+    state: str = "failed"
+    summary: str = "supervisor never started"
+    heartbeat_stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(store, session_id, heartbeat_stop)
+    )
     try:
         state, summary = await sup.run()
     except KeyboardInterrupt:
         state, summary = "cancelled", "interrupted by user"
+    except Exception as e:  # noqa: BLE001 — we want the message, not the type leak
+        state, summary = "failed", f"{type(e).__name__}: {e}"
+        console.print(f"[red]✗ supervisor crashed:[/red] {summary}")
     finally:
-        await sup.cleanup(keep_tmux=not args.no_tmux_cleanup)
-        await store.save_session(session_id, {"status": state if state != "cancelled" else "paused"})
+        heartbeat_stop.set()
+        try:
+            await asyncio.wait_for(heartbeat_task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            heartbeat_task.cancel()
+        try:
+            await sup.cleanup(keep_tmux=not args.no_tmux_cleanup)
+        except Exception as e:
+            console.print(f"[yellow]cleanup warning:[/yellow] {e}")
+        await store.save_session(
+            session_id, {"status": state if state != "cancelled" else "paused"},
+        )
         await hooks.run("post_session", {
             "session_id": session_id, "state": state, "summary": summary,
         })
@@ -468,7 +796,7 @@ async def _run_manual(args, available: list[dict], store: StateStore, session_id
         "status": "active",
     })
     pool = WorkerPool(args.project, session_id, store)
-    # Use the lead-pane only (no supervisor); workers window stays empty.
+    # Use the lead-pane only (no supervisor); single-window layout.
     await pool.start_session([
         "bash", "-lc",
         f"echo '=== ORCH manual: {agent['name']} ==='; "
@@ -490,7 +818,10 @@ async def _run_manual(args, available: list[dict], store: StateStore, session_id
         f"Attach to watch and steer; review the diff in the worktree before merging.[/dim]",
         title="[green]manual mode started[/green]", border_style="green",
     ))
-    if args.attach:
+    want_attach = (
+        _should_auto_attach() if args.attach is None else args.attach
+    )
+    if want_attach:
         _attach_to_tmux(pool.tmux_session_name)
     return 0
 
