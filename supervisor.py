@@ -191,6 +191,20 @@ class Supervisor:
         # 5. Run the MCP server in this loop until the goal future fires
         self._mcp_task = asyncio.create_task(self._mcp_app.run_sse_async())
 
+        # If the MCP server crashes before the goal is resolved, unblock
+        # the future so run() doesn't hang forever.
+        def _on_mcp_done(t: asyncio.Task) -> None:
+            if self._goal_future and not self._goal_future.done():
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc:
+                    self._goal_future.set_result(
+                        ("failed", f"MCP server crashed: {exc}")
+                    )
+
+        self._mcp_task.add_done_callback(_on_mcp_done)
+
         # Defaults so a failure inside the future / finally never leaks an
         # UnboundLocalError out to orchestrator.main().
         state: str = "failed"
