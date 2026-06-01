@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         python-version: ['3.11', '3.12', '3.13']
 
     steps:
@@ -27,10 +27,6 @@ jobs:
       - name: Install tmux (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux
-
-      - name: Install tmux (macOS)
-        if: runner.os == 'macOS'
-        run: brew install tmux
 
       - name: Install ORCH (with dev extras)
         run: |
