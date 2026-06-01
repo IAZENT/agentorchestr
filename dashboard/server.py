@@ -30,7 +30,7 @@ _HTML = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ORCH Dashboard</title>
+<title>agentorchestr — dashboard</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          background: #0e1116; color: #c9d1d9; margin: 0; padding: 24px; }
@@ -52,7 +52,7 @@ _HTML = """<!doctype html>
 </style>
 </head>
 <body>
-  <h1>ORCH — sessions</h1>
+  <h1>agentorchestr — sessions</h1>
   <div class="sub">live-refreshing every 5s · <a href="/api/sessions">json</a></div>
   <table id="t">
     <thead>
@@ -96,7 +96,7 @@ setInterval(refresh, 5000);
 
 
 def build_app(store: StateStore) -> FastAPI:
-    app = FastAPI(title="ORCH Dashboard", docs_url="/api/docs", redoc_url=None)
+    app = FastAPI(title="agentorchestr — dashboard", docs_url="/api/docs", redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -179,7 +179,7 @@ async def start_dashboard(store: StateStore, host: str = "127.0.0.1", port: int 
     app = build_app(store)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
-    print(f"ORCH dashboard → http://{host}:{port}")
+    print(f"agentorchestr dashboard → http://{host}:{port}")
     await server.serve()
 
 

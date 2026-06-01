@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ORCH — supervisor-worker agent orchestrator
-============================================
+agentorchestr — supervisor-worker agent orchestrator
+=====================================================
 
 Two modes:
 
@@ -47,14 +47,21 @@ from supervisor import Supervisor
 
 console = Console()
 
-BANNER = """
+BANNER = r"""
 [bold cyan]
-  ██████╗ ██████╗  ██████╗██╗  ██╗
- ██╔═══██╗██╔══██╗██╔════╝██║  ██║
- ██║   ██║██████╔╝██║     ███████║
- ██║   ██║██╔══██╗██║     ██╔══██║
- ╚██████╔╝██║  ██║╚██████╗██║  ██║
-  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
+   █████╗   ██████╗ ███████╗███╗   ██╗████████╗
+  ██╔══██╗ ██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+  ███████║ ██║  ███╗█████╗  ██╔██╗ ██║   ██║
+  ██╔══██║ ██║   ██║██╔══╝  ██║╚██╗██║   ██║
+  ██║  ██║ ╚██████╔╝███████╗██║   ╚██║   ██║
+  ╚═╝  ╚═╝  ╚═════╝ ╚══════╝╚═╝    ╚═╝   ╚═╝
+
+   ██████╗ ██████╗  ██████╗██╗  ██╗███████╗███████╗████████╗██████╗
+  ██╔═══██╗██╔══██╗██╔════╝██║  ██║██╔════╝██╔════╝╚══██╔══╝██╔══██╗
+  ██║   ██║██████╔╝██║     ███████║█████╗  ███████╗   ██║   ██████╔╝
+  ██║   ██║██╔══██╗██║     ██╔══██║██╔══╝  ╚════██║   ██║   ██╔══██╗
+  ╚██████╔╝██║  ██║╚██████╗██║  ██║███████╗███████║   ██║   ██║  ██║
+   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═╝
 [/bold cyan]
 [dim]supervisor-worker · tmux · MCP[/dim]
 """
@@ -67,6 +74,12 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
 
     Used when neither --agents nor --lead are given.
     """
+    if not sys.stdin.isatty():
+        # No TTY (CI / piped) — fall back to top-3 heuristic silently.
+        cli = [a for a in available if a["type"] in ("sdk", "cli")][:3]
+        if not cli:
+            return [], None
+        return cli, cli[0]
     console.print("\n[bold cyan]═══ Available agents ═══[/bold cyan]")
     for i, a in enumerate(available, 1):
         caps = a.get("capabilities", {})
@@ -85,7 +98,11 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
         "auto-select):[/dim] ",
         end="",
     )
-    raw = input().strip().lower()
+    try:
+        raw = input().strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]cancelled[/dim]")
+        return [], None
     if not raw or raw == "all":
         selected = available[:] if raw == "all" else available[:3]
     else:
@@ -122,7 +139,11 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
         f"{default_lead['name']}):[/dim] ",
         end="",
     )
-    raw = input().strip()
+    try:
+        raw = input().strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]cancelled — using default lead[/dim]")
+        return selected, default_lead
     lead = default_lead
     if raw:
         try:
@@ -204,6 +225,12 @@ def _read_goal(args) -> str:
         return _check_goal_size(args.goal.strip(), source="--goal")
 
     if args.interactive:
+        if not sys.stdin.isatty():
+            console.print(
+                "[red]✗ --interactive requires a TTY. "
+                "Pipe stdin? Use --goal-file PATH or --goal '...' instead.[/red]"
+            )
+            return ""
         console.print(
             "[cyan]Enter your goal — paste freely. End with [bold]/end[/bold] on its "
             "own line, or press Enter twice on a blank line.[/cyan]"
@@ -220,6 +247,9 @@ def _read_goal(args) -> str:
                 lines.append(line)
         except EOFError:
             pass  # Ctrl-D also ends paste cleanly.
+        except KeyboardInterrupt:
+            console.print("\n[dim]cancelled[/dim]")
+            return ""
         return _check_goal_size("\n".join(lines).strip(), source="paste")
 
     return ""
@@ -474,7 +504,7 @@ def _attach_to_tmux(session_name: str) -> None:
 
 async def main() -> int:
     parser = argparse.ArgumentParser(
-        description="ORCH — supervisor-worker agent orchestrator",
+        description="agentorchestr — supervisor-worker agent orchestrator",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -528,6 +558,20 @@ async def main() -> int:
                              "and append .gitignore patterns. Idempotent.")
     parser.add_argument("--init-force", action="store_true",
                         help="With --init: overwrite existing scaffolded files.")
+    parser.add_argument("--setup", action="store_true",
+                        help="Run the first-run wizard now, even if it has "
+                             "already been completed. Detects agents, lets "
+                             "you pick lead + worker layout, persists the "
+                             "choice for next time.")
+    parser.add_argument("--no-setup", action="store_true",
+                        help="Skip the first-run wizard even if it has "
+                             "never been completed (useful for CI / "
+                             "non-interactive runs).")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Run a comprehensive health check (Python, "
+                             "tmux, git, mcp, optional deps, agents, LLM "
+                             "keys, write access to XDG dirs) and exit. "
+                             "Exit code 0 = healthy, 1 = degraded.")
     args = parser.parse_args()
 
     console.print(BANNER)
@@ -556,11 +600,18 @@ async def main() -> int:
         await llm.close(); await store.close()
         return rc
 
+    # `orch --doctor` runs a comprehensive health check then exits.
+    if args.doctor:
+        from doctor import run_doctor
+        rc = run_doctor(available, llm)
+        await llm.close(); await store.close()
+        return rc
+
     # `orch --init` scaffolds the per-project layout, then exits.
     if args.init:
         from paths import init_project
         actions = init_project(args.project, force=args.init_force)
-        console.print(f"\n[bold cyan]ORCH project init at {args.project}[/bold cyan]")
+        console.print(f"\n[bold cyan]agentorchestr project init at {args.project}[/bold cyan]")
         for path, action in actions.items():
             color = {
                 "created": "green", "appended": "green",
@@ -591,6 +642,24 @@ async def main() -> int:
             border_style="red", title="no agents"
         ))
         await llm.close(); await store.close(); return 1
+
+    # First-run wizard / --setup.  Skipped for non-interactive CLI usage
+    # (--manual --task, explicit --agents/--lead, or --no-setup).
+    wizard_layout = None
+    try:
+        import wizard
+        skip_wizard = (
+            args.no_setup
+            or bool(args.agents)
+            or bool(args.lead)
+            or args.manual
+            or not sys.stdin.isatty()
+        )
+        if not skip_wizard and wizard.needs_wizard(args, available):
+            wizard_layout = wizard.run(available, args.project)
+    except Exception as e:  # pragma: no cover — wizard must never break startup
+        console.print(f"[yellow]wizard skipped: {e}[/yellow]")
+        wizard_layout = None
 
     # Resume?
     session_id = args.resume
@@ -624,9 +693,79 @@ async def main() -> int:
         )
         await llm.close(); await store.close(); return 0
 
-    # Pick agents + lead
-    workers, lead = _resolve_agents(args, available)
+    # Pick agents + lead.  Precedence:
+    #   1. Wizard layout from this session (if just run).
+    #   2. Saved preferences (from a prior --setup).
+    #   3. The heuristic in _resolve_agents.
+    #
+    # CLI overrides (--agents / --lead / --manual) skip 1 + 2 and go
+    # straight to _resolve_agents which already handles them.
+    workers: list[dict] = []
+    lead: dict | None = None
+    if wizard_layout is not None:
+        workers, lead = wizard_layout.workers, wizard_layout.lead
+    elif not args.agents and not args.lead and not args.manual:
+        try:
+            import preferences as _prefs
+            saved = _prefs.load()
+        except Exception:
+            saved = {}
+        agents_pref = saved.get("agents", {}) if saved else {}
+        if agents_pref.get("lead") and agents_pref.get("workers"):
+            by_name = {a["name"]: a for a in available}
+            saved_lead = by_name.get(agents_pref["lead"])
+            saved_workers = [by_name[n] for n in agents_pref["workers"] if n in by_name]
+            missing = [n for n in agents_pref["workers"] if n not in by_name]
+            if missing:
+                console.print(
+                    f"[yellow]⚠ saved worker(s) {missing} no longer installed — "
+                    f"falling back to defaults.[/yellow]"
+                )
+            if saved_lead and saved_workers:
+                lead = saved_lead
+                count = int(agents_pref.get("worker_count", len(saved_workers)))
+                count = max(1, min(count, 8))
+                workers = [saved_workers[i % len(saved_workers)] for i in range(count)]
+                console.print(
+                    f"[dim]using saved preferences "
+                    f"(lead={lead['name']}, {count} worker(s)) — "
+                    f"override with --setup or --agents/--lead.[/dim]"
+                )
+            elif not saved_lead and agents_pref.get("lead"):
+                console.print(
+                    f"[yellow]⚠ saved lead {agents_pref['lead']!r} no longer "
+                    f"installed — re-run with --setup to pick a new one.[/yellow]"
+                )
+        elif not args.no_setup and sys.stdin.isatty():
+            # Fresh install, no preferences yet, interactive — hint at --setup.
+            console.print(
+                "[dim]No saved layout. Using top-3 heuristic. "
+                "Run [cyan]orch --setup[/cyan] to choose your own.[/dim]"
+            )
     if not workers or lead is None:
+        workers, lead = _resolve_agents(args, available)
+    if not workers or lead is None:
+        # Nothing usable.  Diagnose why and exit cleanly.
+        ide_only = available and all(a["type"] in ("ide", "gh") for a in available)
+        if ide_only:
+            console.print(Panel(
+                "[red]Only IDE-style agents detected.[/red]\n"
+                "agentorchestr's auto mode needs at least one CLI/SDK agent\n"
+                "(claude, openclaude, kiro, opencode, aider, codex, gemini, "
+                "goose, amp).\n\n"
+                "Cursor / Windsurf / Copilot can't be driven from the\n"
+                "supervisor's MCP surface.\n\n"
+                "Install one CLI agent, or use --manual --task '...' to drive\n"
+                "an agent directly without a supervisor.",
+                border_style="red", title="no CLI agent available",
+            ))
+        else:
+            console.print(Panel(
+                "[red]Could not pick a lead + worker layout.[/red]\n"
+                "Try [cyan]orch --setup[/cyan] to walk through it manually,\n"
+                "or pass [cyan]--agents <name> [...]  --lead <name>[/cyan].",
+                border_style="red", title="agent selection failed",
+            ))
         await llm.close(); await store.close(); return 1
 
     console.print(

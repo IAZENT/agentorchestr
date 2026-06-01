@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orch"
-version = "0.3.0"
-description = "Zero-cost agent orchestrator over any installed CLI coding agent"
+name = "agentorchestr"
+version = "0.4.0"
+description = "Agent orchestrator for terminal-based coding agents — discovers installed CLIs, runs them in parallel, ships giant projects in hours"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "ORCH contributors" }]
-keywords = ["agents", "orchestration", "llm", "tmux", "mcp"]
+authors = [{ name = "agentorchestr contributors" }]
+keywords = ["agents", "orchestration", "llm", "tmux", "mcp", "claude", "kiro", "codex"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -50,8 +50,10 @@ orch      = "orchestrator:_sync_main"
 orch-shim = "orch_shim:main"
 
 [project.urls]
-Homepage      = "https://github.com/you/orch"
-Documentation = "https://github.com/you/orch#readme"
+Homepage      = "https://github.com/IAZENT/ORCH"
+Documentation = "https://github.com/IAZENT/ORCH#readme"
+Repository    = "https://github.com/IAZENT/ORCH"
+Issues        = "https://github.com/IAZENT/ORCH/issues"
 
 [tool.setuptools]
 # Real top-level modules only.  Files listed here MUST exist on disk.
@@ -70,6 +72,11 @@ py-modules = [
     "orch_shim",
     "discovery",
     "research",
+    "paths",
+    "preferences",
+    "wizard",
+    "complexity",
+    "doctor",
 ]
 
 [tool.setuptools.packages.find]

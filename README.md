@@ -1,10 +1,11 @@
-# ORCH
+# agentorchestr
 
-A zero-cost agent orchestrator for terminal-based coding agents.
-ORCH supervises and coordinates installed CLI agents (Claude Code,
-Kiro, OpenClaude, OpenCode, Codex, Gemini CLI, Aider, Goose…) so they
-can work in parallel on a single goal — without locking you into a
-proprietary stack.
+A production-grade orchestrator for terminal-based coding agents.
+**agentorchestr** supervises and coordinates installed CLI agents (Claude
+Code, Kiro, OpenClaude, OpenCode, Codex, Gemini CLI, Aider, Goose…) so
+they can work in parallel on a single goal — using small **and** large
+agents together to ship giant projects in hours, without locking you
+into a proprietary stack.
 
 * Single-window tmux layout: lead at the top, workers tile below.
 * MCP bridge: the lead agent calls `spawn_worker`, `verify`,
@@ -17,15 +18,18 @@ proprietary stack.
   auto-attach to matching tasks.
 * Sub-second LLM router across hosted free tiers (Anthropic, Cerebras,
   Groq, Gemini, OpenRouter) with prompt caching enabled by default.
+* First-run wizard: detects every agent on your system, asks you to
+  pick a lead and workers, or runs in **automatic mode** that decides
+  for you based on project complexity.
 
 ---
 
 ## Install
 
 ```bash
-pipx install orch              # once published
+pipx install agentorchestr           # once published
 # or, from source:
-git clone https://github.com/<you>/orch && cd orch
+git clone https://github.com/IAZENT/ORCH && cd ORCH
 python3 -m venv .env && source .env/bin/activate
 pip install -e ".[dev]"
 ```

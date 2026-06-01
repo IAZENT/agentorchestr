@@ -147,7 +147,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print("═══════════════════════════════════════")
-    print("  ORCH — bootstrap & environment check")
+    print("  agentorchestr — bootstrap & environment check")
     print("═══════════════════════════════════════\n")
 
     check_python()
