@@ -1,7 +1,7 @@
 """
 router.py
 ==========
-LLM router for ORCH orchestration intelligence.
+LLM router for agentorchestr orchestration intelligence.
 
 Provider priority (the first one with credentials wins; rest are fallbacks):
   1. Anthropic direct         — paid, but cache reads cost 10% of input price
@@ -26,7 +26,7 @@ Resilience:
     cooldown (default 60s) so we stop hammering it.
   - Each call records `last_provider`, `last_latency_ms`.
 
-Note: ORCH no longer ships an Ollama / local-LLM fallback.  Local models
+Note: agentorchestr no longer ships an Ollama / local-LLM fallback.  Local models
 were too slow for the orchestration latency budget — every supervisor
 turn pays the cost.  Stick to the hosted free tiers above; they're all
 sub-second to first token.

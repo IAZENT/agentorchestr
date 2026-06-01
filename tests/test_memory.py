@@ -25,7 +25,7 @@ def disable_vec(monkeypatch):
 
 @pytest.fixture
 async def fed_under_test(tmp_path, disable_vec, monkeypatch):
-    # Force a project-local global dir so we don't pollute ~/.orch
+    # Force a project-local global dir so we don't pollute ~/.agentorchestr
     global_dir = tmp_path / "user-global"
     monkeypatch.setattr(fed, "GLOBAL_DIR", global_dir)
     project_root = tmp_path / "proj"
@@ -44,9 +44,9 @@ async def test_init_creates_directories_and_db(tmp_path, disable_vec, monkeypatc
     f = MemoryFederation(project)
     await f.init()
     try:
-        assert (project / ".orch" / "memory" / "topics").is_dir()
-        assert (project / ".orch" / "memory" / "episodes").is_dir()
-        assert (project / ".orch" / "memory" / "index.sqlite").exists()
+        assert (project / ".agentorchestr" / "memory" / "topics").is_dir()
+        assert (project / ".agentorchestr" / "memory" / "episodes").is_dir()
+        assert (project / ".agentorchestr" / "memory" / "index.sqlite").exists()
     finally:
         f.close()
 

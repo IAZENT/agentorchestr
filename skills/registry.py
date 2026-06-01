@@ -21,7 +21,7 @@ def _default_skills_dir() -> Path:
         from paths import global_skills_dir
         return global_skills_dir()
     except Exception:
-        return Path(os.path.expanduser("~/.orch/skills"))
+        return Path(os.path.expanduser("~/.agentorchestr/skills"))
 
 
 DEFAULT_SKILLS_DIR = _default_skills_dir()
@@ -105,7 +105,7 @@ class SkillRegistry:
             try:
                 self._skills.append(self._load_one(child))
             except (FileNotFoundError, tomllib.TOMLDecodeError, SignatureError):
-                # Skip malformed/un-trusted skills silently — orch skill list
+                # Skip malformed/un-trusted skills silently — agentorchestr skill list
                 # surfaces them via verify().
                 continue
 
@@ -133,7 +133,7 @@ class SkillRegistry:
             parts.append(s.body[:per_skill])
         return "\n\n".join(parts)
 
-    # ── package-management primitives (used by orch skill add/remove) ──
+    # ── package-management primitives (used by agentorchestr skill add/remove) ──
 
     def add_from_git(self, url: str, *, name: Optional[str] = None) -> Skill:
         """Clone `url` into skills_dir/<name>. Returns the loaded Skill."""

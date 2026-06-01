@@ -1,5 +1,5 @@
 """
-perspectives.py — system-prompt templates for ORCH workers
+perspectives.py — system-prompt templates for agentorchestr workers
 ============================================================
 
 Each worker is launched with a perspective-specific system prompt so the
@@ -28,7 +28,7 @@ from typing import Iterable
 # Common preamble shared by every worker so the result-protocol is uniform
 # across perspectives.
 _PREAMBLE = """\
-You are an ORCH worker agent in a multi-agent coding session.
+You are an agentorchestr worker agent in a multi-agent coding session.
 A supervisor agent will dispatch work to you and review your output.
 
 Working agreement:

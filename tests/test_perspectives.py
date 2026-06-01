@@ -64,7 +64,7 @@ def test_reviewer_is_readonly_by_default():
 
 
 def test_researcher_prompt_advertises_web_research_tool():
-    """The researcher must know about ORCH's MCP web_research tool —
+    """The researcher must know about agentorchestr's MCP web_research tool —
     that's the cache-aware path. Native agent web tools are a fallback."""
     p = perspectives.system_prompt("researcher", task="find latest fastapi version")
     assert "Role: RESEARCHER" in p

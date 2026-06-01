@@ -1,5 +1,5 @@
 """
-research.py — web research for ORCH workers
+research.py — web research for agentorchestr workers
 =============================================
 
 Two layers:
@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - optional dep
 
 
 DEFAULT_TIMEOUT = 8.0
-DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; ORCH-research/1.0)"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; agentorchestr-research/1.0)"
 
 
 @dataclass

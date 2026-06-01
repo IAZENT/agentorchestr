@@ -27,9 +27,9 @@ Thumbs.db
 *.swo
 *~
 
-# ORCH runtime artifacts
-.orch/
-~/.orch/
+# agentagentorchestrestr runtime artifacts
+.agentorchestr/
+~/.agentorchestr/
 
 # Local agent settings (user-specific)
 .openclaude/

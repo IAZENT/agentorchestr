@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bootstrap.py — ORCH installer + environment check
+bootstrap.py — agentorchestr installer + environment check
 ==================================================
 Installs core deps (and optional extras), then prints a status
 report of detected agents, LLM keys, and tmux availability.
@@ -96,7 +96,7 @@ def pip_install(packages: list[str], force_system: bool) -> None:
 
 def check_env_vars() -> list[str]:
     print("\n── LLM Backends ────────────────────────────────")
-    print("ORCH needs at least one hosted LLM API key.\n")
+    print("agentorchestr needs at least one hosted LLM API key.\n")
     configured = []
     for key, (url, note) in ENV_VARS.items():
         val = os.environ.get(key)
@@ -117,7 +117,7 @@ def check_tmux() -> None:
     if shutil.which("tmux"):
         print("✓ tmux available (multi-pane agent sessions enabled)")
     else:
-        print("⚠  tmux not found. ORCH will use subprocess mode (no visual splits).")
+        print("⚠  tmux not found. agentorchestr will use subprocess mode (no visual splits).")
         print("   Install: brew install tmux  OR  sudo apt install tmux")
 
 

@@ -1,7 +1,7 @@
 """
 dashboard/server.py
 ====================
-Minimal FastAPI dashboard for ORCH.
+Minimal FastAPI dashboard for agentorchestr.
 
 Endpoints:
   GET  /                     → HTML overview (sessions list)

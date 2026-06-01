@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-orch_shim.py — wrap a CLI agent so ORCH supervisors can find and drive it
+agentorchestr_shim.py — wrap a CLI agent so agentorchestr supervisors can find and drive it
 ==========================================================================
 
 Usage:
-  orch-shim <agent-binary> [args...]
+  agentorchestr-shim <agent-binary> [args...]
 
 What it does:
   1. Spawns the underlying agent as a subprocess with a PTY so the
      interactive REPL behaves correctly.
-  2. Listens on a Unix-domain socket at $XDG_RUNTIME_DIR/orch-agents/<pid>.sock
+  2. Listens on a Unix-domain socket at $XDG_RUNTIME_DIR/agentorchestr-agents/<pid>.sock
      and serves a tiny JSON-RPC tool surface:
 
         {"id": 1, "method": "info"}
@@ -24,10 +24,10 @@ What it does:
         {"id": 4, "method": "kill"}
             -> {"id": 4, "result": {"killed": true}}
 
-  3. Drops an Agent Card at $XDG_RUNTIME_DIR/orch-agents/<pid>.json so any
-     ORCH session on this machine can discover the agent without mDNS.
+  3. Drops an Agent Card at $XDG_RUNTIME_DIR/agentorchestr-agents/<pid>.json so any
+     agentorchestr session on this machine can discover the agent without mDNS.
 
-  4. Optionally advertises via mDNS service type `_orch-agent._tcp.local.`
+  4. Optionally advertises via mDNS service type `_agentorchestr-agent._tcp.local.`
      (requires the `zeroconf` extra; safe to skip if unavailable).
 
 Why this exists:
@@ -38,7 +38,7 @@ Why this exists:
   from tmux alone.
 
 Single-file by design: 0 deps beyond the Python stdlib + an optional
-zeroconf import. Run by users like `orch-shim kiro chat` and forget it.
+zeroconf import. Run by users like `agentorchestr-shim kiro chat` and forget it.
 """
 from __future__ import annotations
 
@@ -58,8 +58,8 @@ from pathlib import Path
 from typing import Optional
 
 
-SOCK_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/run-{os.getuid()}") / "orch-agents"
-MDNS_SERVICE_TYPE = "_orch-agent._tcp.local."
+SOCK_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/run-{os.getuid()}") / "agentorchestr-agents"
+MDNS_SERVICE_TYPE = "_agentorchestr-agent._tcp.local."
 SHIM_VERSION = "1"
 
 
@@ -88,7 +88,7 @@ class ShimAgent:
                 os.execvp(self.argv[0], self.argv)
             except OSError as e:
                 # If exec failed, exit the child loudly; parent sees EOF.
-                os.write(2, f"orch-shim exec failed: {e}\n".encode())
+                os.write(2, f"agentorchestr-shim exec failed: {e}\n".encode())
                 os._exit(127)
 
         self.pid = pid
@@ -374,7 +374,7 @@ def _stop_mdns(handle) -> None:
 
 async def _run(argv: list[str]) -> int:
     if not argv:
-        print("orch-shim: missing agent command", file=sys.stderr)
+        print("agentorchestr-shim: missing agent command", file=sys.stderr)
         return 2
 
     # Resolve the binary so the card carries an absolute path.
@@ -394,9 +394,9 @@ async def _run(argv: list[str]) -> int:
     _write_card(card, card_path)
     mdns_handle = _try_advertise_mdns(card)
 
-    print(f"orch-shim: {name} pid={agent.pid} sock={sock_path}", file=sys.stderr)
+    print(f"agentorchestr-shim: {name} pid={agent.pid} sock={sock_path}", file=sys.stderr)
     if mdns_handle is None:
-        print("orch-shim: mDNS not available, using filesystem-only discovery",
+        print("agentorchestr-shim: mDNS not available, using filesystem-only discovery",
               file=sys.stderr)
 
     serve_task = asyncio.create_task(server.serve_forever())
@@ -459,8 +459,8 @@ async def _bridge_stdout(agent: ShimAgent) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Wrap a CLI agent so ORCH can discover + drive it.",
-        usage="orch-shim AGENT [ARGS...]",
+        description="Wrap a CLI agent so agentorchestr can discover + drive it.",
+        usage="agentorchestr-shim AGENT [ARGS...]",
     )
     # Use parse_known_args so anything after the agent passes through unchanged.
     parser.add_argument("agent", help="Agent binary, e.g. kiro / claude / opencode")

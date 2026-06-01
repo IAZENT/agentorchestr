@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-HOOKS_CONFIG = ".orch/hooks.json"
+HOOKS_CONFIG = ".agentorchestr/hooks.json"
 
 # Hook events
 EVENTS = [
@@ -39,7 +39,7 @@ class HookManager:
         self._load_hooks()
 
     def _load_hooks(self):
-        """Load hook configuration from .orch/hooks.json."""
+        """Load hook configuration from .agentorchestr/hooks.json."""
         config_path = self.project_root / HOOKS_CONFIG
         if not config_path.exists():
             return
@@ -107,9 +107,9 @@ class HookManager:
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         example = {
-            "pre_task": "echo 'Task starting: ' $(cat) | logger -t orch",
-            "post_task": "echo 'Task complete' > /tmp/orch_last_task.log",
-            "on_failure": "echo 'Task failed — review needed' | mail -s 'ORCH Alert' you@example.com",
+            "pre_task": "echo 'Task starting: ' $(cat) | logger -t agentorchestr",
+            "post_task": "echo 'Task complete' > /tmp/agentorchestr_last_task.log",
+            "on_failure": "echo 'Task failed — review needed' | mail -s 'agentorchestr Alert' you@example.com",
         }
 
         with open(config_path, "w") as f:

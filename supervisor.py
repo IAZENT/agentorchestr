@@ -1,5 +1,5 @@
 """
-supervisor.py — top-level coordinator for ORCH "auto" mode
+supervisor.py — top-level coordinator for agentorchestr "auto" mode
 ============================================================
 
 Flow:
@@ -31,9 +31,9 @@ from worker_pool import WorkerPool
 
 
 SUPERVISOR_PROMPT_TEMPLATE = """\
-You are the SUPERVISOR for an ORCH multi-agent coding session.
+You are the SUPERVISOR for an agentorchestr multi-agent coding session.
 
-Your tools are exposed via the MCP server "orch" — list them with
+Your tools are exposed via the MCP server "agentorchestr" — list them with
 list_tools() if you forget. Key capabilities you should know about:
   • spawn_worker(perspective=…) where perspective is one of
     {{implementer, tester, reviewer, security, performance,
@@ -180,7 +180,7 @@ class Supervisor:
             prompt = memory_preamble + "\n\n---\n\n" + body
         else:
             prompt = body
-        prompt_dir = Path(f"/tmp/orch-{self.session_id}")
+        prompt_dir = Path(f"/tmp/agentorchestr-{self.session_id}")
         prompt_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = prompt_dir / "supervisor_prompt.txt"
         prompt_path.write_text(prompt)

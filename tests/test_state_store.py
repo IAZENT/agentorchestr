@@ -150,7 +150,7 @@ async def test_worker_upsert_and_query(store):
     await store.save_session("s1", {"goal": "g", "plan": {}, "agents": [], "status": "active"})
     await store.upsert_worker("s1", {
         "worker_id": "w01", "perspective": "implementer", "agent_name": "openclaude",
-        "worktree": "/tmp/orch/wt", "branch": "orch/s1/wt", "pane_id": "%1",
+        "worktree": "/tmp/agentorchestr/wt", "branch": "agentorchestr/s1/wt", "pane_id": "%1",
         "task": "build it", "state": "running", "summary": "",
         "started_at": 1.0, "finished_at": None,
     })
@@ -161,7 +161,7 @@ async def test_worker_upsert_and_query(store):
     # Update — same primary key, new state
     await store.upsert_worker("s1", {
         "worker_id": "w01", "perspective": "implementer", "agent_name": "openclaude",
-        "worktree": "/tmp/orch/wt", "branch": "orch/s1/wt", "pane_id": "%1",
+        "worktree": "/tmp/agentorchestr/wt", "branch": "agentorchestr/s1/wt", "pane_id": "%1",
         "task": "build it", "state": "done", "summary": "shipped",
         "started_at": 1.0, "finished_at": 2.0,
     })

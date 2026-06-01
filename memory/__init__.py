@@ -1,20 +1,20 @@
 """
-memory — three-tier memory federation for ORCH
+memory — three-tier memory federation for agentorchestr
 ================================================
 
 Three tiers, each backed by markdown that's git-friendly and human-editable:
 
-    Global      ~/.orch/memory/
+    Global      ~/.agentorchestr/memory/
         global.md            preferences across all projects
         skills/              imported skill definitions (Phase-4)
 
-    Project     <project>/.orch/memory/
+    Project     <project>/.agentorchestr/memory/
         PROJECT.md           architecture, conventions (auto-loaded)
         CONVENTIONS.md       style/lint/test rules
         topics/*.md          one file per learned topic
         episodes/*.md        per-session journal entries
 
-    Session     <worktree>/.orch/
+    Session     <worktree>/.agentorchestr/
         ledger.jsonl         append-only tool-call log (Phase-2 op_log)
 
 Retrieval is hybrid:

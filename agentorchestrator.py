@@ -38,6 +38,7 @@ from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 from agent_detector import AgentDetector
 from hooks import HookManager
@@ -49,19 +50,18 @@ console = Console()
 
 BANNER = r"""
 [bold cyan]
-   █████╗   ██████╗ ███████╗███╗   ██╗████████╗
-  ██╔══██╗ ██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
-  ███████║ ██║  ███╗█████╗  ██╔██╗ ██║   ██║
-  ██╔══██║ ██║   ██║██╔══╝  ██║╚██╗██║   ██║
-  ██║  ██║ ╚██████╔╝███████╗██║   ╚██║   ██║
-  ╚═╝  ╚═╝  ╚═════╝ ╚══════╝╚═╝    ╚═╝   ╚═╝
-
-   ██████╗ ██████╗  ██████╗██╗  ██╗███████╗███████╗████████╗██████╗
-  ██╔═══██╗██╔══██╗██╔════╝██║  ██║██╔════╝██╔════╝╚══██╔══╝██╔══██╗
-  ██║   ██║██████╔╝██║     ███████║█████╗  ███████╗   ██║   ██████╔╝
-  ██║   ██║██╔══██╗██║     ██╔══██║██╔══╝  ╚════██║   ██║   ██╔══██╗
-  ╚██████╔╝██║  ██║╚██████╗██║  ██║███████╗███████║   ██║   ██║  ██║
-   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═╝
+    █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+   ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+   ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+   ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+   ██║  ██║╚██████╔╝███████╗██║   ╚██║   ██║
+   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝    ╚═╝   ╚═╝
+   ██████╗ ██████╗  ██████╗██╗  ██╗████████╗██████╗
+  ██╔═══██╗██╔══██╗██╔════╝██║  ██║╚══██╔══╝██╔══██╗
+  ██║   ██║██████╔╝██║     ███████║   ██║   ██████╔╝
+  ██║   ██║██╔══██╗██║     ██╔══██║   ██║   ██╔══██╗
+  ╚██████╔╝██║  ██║╚██████╗██║  ██║   ██║   ██║  ██║
+   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
 [/bold cyan]
 [dim]supervisor-worker · tmux · MCP[/dim]
 """
@@ -274,6 +274,33 @@ def _check_goal_size(text: str, *, source: str) -> str:
     return text
 
 
+def _show_agents_table(available: list[dict]) -> None:
+    if not available:
+        console.print("[yellow]No agents detected on PATH.[/yellow]")
+        return
+    from rich.table import Table
+    table = Table(show_header=True, header_style="cyan", box=None, pad_edge=False)
+    table.add_column("#", justify="right", style="cyan", no_wrap=True)
+    table.add_column("name", style="bold")
+    table.add_column("type")
+    table.add_column("orch", justify="right")
+    table.add_column("impl", justify="right")
+    table.add_column("flags", style="dim")
+    for i, a in enumerate(available, 1):
+        caps = a.get("capabilities", {})
+        flags = " ".join(filter(None, [
+            "parallel" if caps.get("parallel") else "",
+            "mcp" if caps.get("mcp") else "",
+        ]))
+        table.add_row(
+            str(i), a["name"], a["type"],
+            str(caps.get("orchestrate", "?")),
+            str(caps.get("implement", "?")),
+            flags,
+        )
+    console.print(table)
+
+
 def _print_detection(available: list[dict], llm: LLMRouter) -> None:
     console.print("\n[bold cyan]═══ Agents on PATH ═══[/bold cyan]")
     if not available:
@@ -299,12 +326,12 @@ def _print_detection(available: list[dict], llm: LLMRouter) -> None:
     else:
         console.print(
             "\n[dim]No external LLM keys configured. "
-            "ORCH's free-LLM router is used only for legacy quality-gate evaluation; "
+            "agentorchestr's free-LLM router is used only for legacy quality-gate evaluation; "
             "auto mode runs entirely on the agents' own auth.[/dim]"
         )
 
     # Surface the optional-but-required-for-auto-mode dependencies.
-    console.print("\n[bold cyan]═══ ORCH dependencies ═══[/bold cyan]")
+    console.print("\n[bold cyan]═══ agentorchestr dependencies ═══[/bold cyan]")
     from mcp_bridge import MCP_AVAILABLE
     try:
         import zeroconf  # noqa: F401
@@ -317,7 +344,7 @@ def _print_detection(available: list[dict], llm: LLMRouter) -> None:
     except ImportError:
         ddgs_ok = False
     rows = [
-        ("mcp", MCP_AVAILABLE, "REQUIRED for auto mode (lead<->ORCH bridge)",
+        ("mcp", MCP_AVAILABLE, "REQUIRED for auto mode (lead<->agentorchestr bridge)",
          "pip install 'mcp>=1.20'"),
         ("zeroconf", zc_ok, "optional: cross-terminal agent discovery",
          "pip install 'zeroconf>=0.140'"),
@@ -335,7 +362,7 @@ async def _print_session_list(store: StateStore) -> None:
     from datetime import datetime
     rows = await store.list_sessions(limit=20)
     if not rows:
-        console.print("[dim]No sessions in ~/.orch/state.db yet.[/dim]")
+        console.print("[dim]No sessions in ~/.agentorchestr/state.db yet.[/dim]")
         return
     console.print("\n[bold cyan]═══ Recent sessions ═══[/bold cyan]")
     console.print(f"  [dim]{'id':<10} {'status':<10} {'tasks':<10} {'updated':<19} goal[/dim]")
@@ -442,7 +469,7 @@ async def _heartbeat_loop(store: "StateStore", session_id: str,
             ) or "(no workers yet)"
             tail = f"  | last: {last_id} {last_summary[:80]}" if last_summary else ""
             console.print(
-                f"[dim]\\[{ts}] orch {session_id}  • {counts_str}{tail}[/dim]"
+                f"[dim]\\[{ts}] agentorchestr {session_id}  • {counts_str}{tail}[/dim]"
             )
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
@@ -451,10 +478,10 @@ async def _heartbeat_loop(store: "StateStore", session_id: str,
 
 
 def _should_auto_attach() -> bool:
-    """True when ORCH should spawn / switch a terminal to view tmux by default.
+    """True when agentorchestr should spawn / switch a terminal to view tmux by default.
 
     Mirrors the logic of `_attach_to_tmux` so we don't try to spawn a
-    terminal ORCH can't actually use:
+    terminal agentorchestr can't actually use:
       * Already inside tmux  → True (we'll just `tmux switch-client`).
       * stdin isn't a TTY    → False (probably scripted run).
       * No terminal emulator → False (would silently fail).
@@ -544,7 +571,7 @@ async def main() -> int:
     parser.add_argument("--skill-list", action="store_true",
                         help="List installed skills and exit")
     parser.add_argument("--skill-add", metavar="GIT_URL",
-                        help="git-clone a skill into ~/.orch/skills and exit")
+                        help="git-clone a skill into ~/.agentorchestr/skills and exit")
     parser.add_argument("--skill-remove", metavar="NAME",
                         help="Uninstall a skill by name and exit")
     parser.add_argument("--skill-verify", metavar="NAME",
@@ -552,7 +579,7 @@ async def main() -> int:
     parser.add_argument("--require-signed-skills", action="store_true",
                         help="Refuse to load any skill without a valid ed25519 signature")
     parser.add_argument("--init", action="store_true",
-                        help="Scaffold .orch/ files in the current project "
+                        help="Scaffold .agentorchestr/ files in the current project "
                              "(PROJECT.md, CONVENTIONS.md, hooks.json, "
                              "memory/{topics,episodes,research}/, skills/) "
                              "and append .gitignore patterns. Idempotent.")
@@ -579,10 +606,17 @@ async def main() -> int:
     store = StateStore()
     await store.init()
 
-    detector = AgentDetector()
-    available = detector.detect()
-    llm = LLMRouter()
-    await llm.init()
+    with console.status("[bold cyan]Detecting agents on PATH…[/bold cyan]"):
+        detector = AgentDetector()
+        available = detector.detect()
+    with console.status("[bold cyan]Checking LLM backends…[/bold cyan]"):
+        llm = LLMRouter()
+        await llm.init()
+
+    if not (args.detect or args.list_sessions or args.skill_list
+            or args.skill_add or args.skill_remove or args.skill_verify
+            or args.doctor or args.init or args.dashboard):
+        _show_agents_table(available)
 
     if args.detect:
         _print_detection(available, llm)
@@ -600,14 +634,14 @@ async def main() -> int:
         await llm.close(); await store.close()
         return rc
 
-    # `orch --doctor` runs a comprehensive health check then exits.
+    # `agentorchestr --doctor` runs a comprehensive health check then exits.
     if args.doctor:
         from doctor import run_doctor
         rc = run_doctor(available, llm)
         await llm.close(); await store.close()
         return rc
 
-    # `orch --init` scaffolds the per-project layout, then exits.
+    # `agentorchestr --init` scaffolds the per-project layout, then exits.
     if args.init:
         from paths import init_project
         actions = init_project(args.project, force=args.init_force)
@@ -619,7 +653,7 @@ async def main() -> int:
             }.get(action, "white")
             console.print(f"  [{color}]{action:<10}[/{color}] {path}")
         console.print(
-            "\n[dim]Edit PROJECT.md and CONVENTIONS.md to teach ORCH about "
+            "\n[dim]Edit PROJECT.md and CONVENTIONS.md to teach agentorchestr about "
             "this project — they're auto-loaded into the cacheable preamble "
             "of every session.[/dim]"
         )
@@ -678,6 +712,16 @@ async def main() -> int:
     else:
         goal = _read_goal(args)
         session_id = uuid.uuid4().hex[:8]
+
+    if not goal and not args.manual and sys.stdin.isatty():
+        console.print(
+            "[dim]Tip: pass [cyan]--goal '...'[/cyan] next time, or "
+            "[cyan]--interactive[/cyan] for multi-line paste.[/dim]"
+        )
+        try:
+            goal = Prompt.ask("[bold cyan]Enter your goal[/bold cyan]").strip()
+        except (KeyboardInterrupt, EOFError):
+            goal = ""
 
     if args.manual:
         # Direct dispatch path (claude-squad-style: one task, one agent, one pane)
@@ -740,7 +784,7 @@ async def main() -> int:
             # Fresh install, no preferences yet, interactive — hint at --setup.
             console.print(
                 "[dim]No saved layout. Using top-3 heuristic. "
-                "Run [cyan]orch --setup[/cyan] to choose your own.[/dim]"
+                "Run [cyan]agentorchestr --setup[/cyan] to choose your own.[/dim]"
             )
     if not workers or lead is None:
         workers, lead = _resolve_agents(args, available)
@@ -762,7 +806,7 @@ async def main() -> int:
         else:
             console.print(Panel(
                 "[red]Could not pick a lead + worker layout.[/red]\n"
-                "Try [cyan]orch --setup[/cyan] to walk through it manually,\n"
+                "Try [cyan]agentorchestr --setup[/cyan] to walk through it manually,\n"
                 "or pass [cyan]--agents <name> [...]  --lead <name>[/cyan].",
                 border_style="red", title="agent selection failed",
             ))
@@ -814,12 +858,12 @@ async def main() -> int:
         skills_reg = None
 
     # Auto mode hard-requires the `mcp` library because the lead agent
-    # talks to ORCH over MCP/SSE.  Fail BEFORE we spin up tmux + worktrees.
+    # talks to agentorchestr over MCP/SSE.  Fail BEFORE we spin up tmux + worktrees.
     from mcp_bridge import MCP_AVAILABLE
     if not MCP_AVAILABLE:
         console.print(Panel(
             "[red]The `mcp` Python library is not installed.[/red]\n"
-            "ORCH's auto mode needs it so the lead agent can call back via\n"
+            "agentorchestr's auto mode needs it so the lead agent can call back via\n"
             "MCP/SSE. Install it into your venv:\n\n"
             "  [cyan].env/bin/pip install 'mcp>=1.20'[/cyan]\n"
             "  (or:  [cyan]python bootstrap.py --with-mcp[/cyan])\n\n"
@@ -938,7 +982,7 @@ async def _run_manual(args, available: list[dict], store: StateStore, session_id
     # Use the lead-pane only (no supervisor); single-window layout.
     await pool.start_session([
         "bash", "-lc",
-        f"echo '=== ORCH manual: {agent['name']} ==='; "
+        f"echo '=== agentorchestr manual: {agent['name']} ==='; "
         f"{shlex.quote(agent['cmd'])}",
     ])
     # Spawn one worker with the task as its sole prompt
@@ -953,7 +997,7 @@ async def _run_manual(args, available: list[dict], store: StateStore, session_id
         f"[bold]worker:[/bold]  [cyan]{worker.id}[/cyan] ({agent['name']}, {worker.perspective})\n"
         f"[bold]worktree:[/bold] {worker.worktree}\n"
         f"[bold]attach:[/bold]  [cyan]{pool.attach_command}[/cyan]\n"
-        f"[dim]ORCH exits now. The agent keeps running in tmux. "
+        f"[dim]agentorchestr exits now. The agent keeps running in tmux. "
         f"Attach to watch and steer; review the diff in the worktree before merging.[/dim]",
         title="[green]manual mode started[/green]", border_style="green",
     ))

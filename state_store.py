@@ -14,7 +14,7 @@ import aiosqlite
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path.home() / ".orch" / "state.db"  # legacy default; overridden by paths.state_db_path()
+DB_PATH = Path.home() / ".agentorchestr" / "state.db"  # legacy default; overridden by paths.state_db_path()
 
 
 def _default_db_path() -> Path:
@@ -101,7 +101,7 @@ class StateStore:
             );
 
             -- Durable execution log: append-only record of every side
-            -- effect the supervisor performs.  Used by `orch resume`
+            -- effect the supervisor performs.  Used by `agentorchestr resume`
             -- to skip ops whose idempotency_key already produced a
             -- stored result.
             CREATE TABLE IF NOT EXISTS op_log (
@@ -533,7 +533,7 @@ class StateStore:
     async def get_pending_ops(self, session_id: str) -> list[dict]:
         """Fetch any ops still in 'pending' (i.e. crashed mid-execution).
 
-        Used by `orch resume` to decide what to retry.
+        Used by `agentorchestr resume` to decide what to retry.
         """
         async with self._db.execute(
             "SELECT id, kind, idempotency_key, args_json, created_at "

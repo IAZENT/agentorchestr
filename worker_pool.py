@@ -18,9 +18,9 @@ Why interactive (not headless):
 Lifecycle of a worker:
   1. supervisor calls spawn_worker(task, perspective, file_scope, agent)
   2. WorkerPool creates a git worktree on a fresh branch
-  3. WorkerPool creates a new tmux pane in the orch session
+  3. WorkerPool creates a new tmux pane in the agentorchestr session
   4. WorkerPool writes the system-prompt + task as one text blob to a
-     .orch/worker_<id>_prompt.txt file inside the worktree
+     .agentorchestr/worker_<id>_prompt.txt file inside the worktree
   5. WorkerPool launches the agent CLI with that prompt as positional
      input where the agent supports it (claude/openclaude/kiro-cli all do)
   6. supervisor reads the pane with read_output(), monitors for the
@@ -78,7 +78,7 @@ class WorkerPool:
     def __init__(
         self,
         project_root: str,
-        orch_session_id: str,
+        agentorchestr_session_id: str,
         store: StateStore,
         *,
         tmux_session_name: Optional[str] = None,
@@ -86,13 +86,13 @@ class WorkerPool:
         skills: object | None = None,
     ):
         self.project_root = Path(project_root)
-        self.orch_session_id = orch_session_id
+        self.agentorchestr_session_id = agentorchestr_session_id
         self.store = store
-        self.tmux_session_name = tmux_session_name or f"orch-{orch_session_id}"
+        self.tmux_session_name = tmux_session_name or f"agentorchestr-{agentorchestr_session_id}"
         self._tmux_session = None
         self._workers: dict[str, Worker] = {}
         self._counter = 0
-        self._tmp_root = Path(f"/tmp/orch-{orch_session_id}")
+        self._tmp_root = Path(f"/tmp/agentorchestr-{agentorchestr_session_id}")
         self._tmp_root.mkdir(parents=True, exist_ok=True)
         # Optional memory federation.  When provided, spawn_worker enriches
         # extra_context with the most relevant retrieved memories so they
@@ -130,7 +130,7 @@ class WorkerPool:
 
         self._tmux_session = server.new_session(
             session_name=self.tmux_session_name,
-            window_name="orch",
+            window_name="agentorchestr",
             start_directory=str(self.project_root),
         )
 
@@ -163,7 +163,7 @@ class WorkerPool:
         if not self._is_git():
             return worktree_path, ""
 
-        branch = f"orch/{self.orch_session_id}/{name}"
+        branch = f"agentorchestr/{self.agentorchestr_session_id}/{name}"
         # Fresh branch first; if branch already exists from a stale run,
         # try checking it out into a new worktree.
         r = subprocess.run(
@@ -241,12 +241,12 @@ class WorkerPool:
 
         # Idempotency key: a hash of the inputs the supervisor controls.
         key_blob = "\x00".join([
-            self.orch_session_id, perspective, agent.get("name", ""), task,
+            self.agentorchestr_session_id, perspective, agent.get("name", ""), task,
             "\x01".join(file_scope or []),
         ])
         idem_key = "spawn:" + hashlib.sha256(key_blob.encode()).hexdigest()[:16]
         op_id, prior = await self.store.begin_op(
-            self.orch_session_id, "spawn_worker", idem_key,
+            self.agentorchestr_session_id, "spawn_worker", idem_key,
             {"task": task[:500], "perspective": perspective,
              "agent": agent.get("name"), "file_scope": file_scope or []},
         )
@@ -274,21 +274,21 @@ class WorkerPool:
             pass_criteria=pass_criteria,
             extra_context=merged_extra,
         )
-        prompt_dir = Path(worktree) / ".orch"
+        prompt_dir = Path(worktree) / ".agentorchestr"
         prompt_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = str(prompt_dir / f"prompt_{wid}.txt")
         Path(prompt_path).write_text(prompt)
 
-        # All panes live in a single "orch" window so the lead (pane 0)
+        # All panes live in a single "agentorchestr" window so the lead (pane 0)
         # stays visible at the top while workers tile below it.
-        orch_window = next(
-            (w for w in self._tmux_session.windows if w.window_name == "orch"),
+        agentorchestr_window = next(
+            (w for w in self._tmux_session.windows if w.window_name == "agentorchestr"),
             self._tmux_session.active_window,
         )
-        existing_panes = list(orch_window.panes or [])
+        existing_panes = list(agentorchestr_window.panes or [])
         if len(self._workers) == 0 and len(existing_panes) <= 1:
             # First worker: split below the lead so we don't kill its pane.
-            pane = orch_window.split(direction="down", attach=False)
+            pane = agentorchestr_window.split(direction="down", attach=False)
         else:
             # Subsequent workers: split the BOTTOM pane (the most recent
             # worker), so the lead at the top keeps its full width.
@@ -297,17 +297,17 @@ class WorkerPool:
                 if target is not None and hasattr(target, "split"):
                     pane = target.split(direction="down", attach=False)
                 else:
-                    pane = orch_window.split(direction="down", attach=False)
+                    pane = agentorchestr_window.split(direction="down", attach=False)
             except Exception:
-                pane = orch_window.split(attach=False)
+                pane = agentorchestr_window.split(attach=False)
         try:
             # "main-horizontal" keeps the first pane (lead) tall on top
             # and tiles workers below — better than "even-vertical" which
             # shrinks the lead as workers grow.
-            orch_window.select_layout("main-horizontal")
+            agentorchestr_window.select_layout("main-horizontal")
         except Exception:
             try:
-                orch_window.select_layout("tiled")
+                agentorchestr_window.select_layout("tiled")
             except Exception:
                 pass
 
@@ -322,7 +322,7 @@ class WorkerPool:
 
         worker = Worker(
             id=wid,
-            session_id=self.orch_session_id,
+            session_id=self.agentorchestr_session_id,
             perspective=perspective,
             agent=agent,
             worktree=worktree,
@@ -334,7 +334,7 @@ class WorkerPool:
             state="running",
         )
         self._workers[wid] = worker
-        await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+        await self.store.upsert_worker(self.agentorchestr_session_id, worker_to_row(worker))
         if op_id is not None:
             await self.store.finish_op(
                 op_id,
@@ -461,7 +461,7 @@ class WorkerPool:
                 worker.state = state
                 worker.summary = summary
                 worker.finished_at = time.time()
-                await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+                await self.store.upsert_worker(self.agentorchestr_session_id, worker_to_row(worker))
                 return state, summary
             await asyncio.sleep(poll_interval)
         # Timeout: leave worker running but record the timeout against the row
@@ -469,7 +469,7 @@ class WorkerPool:
         worker.state = "timeout"
         worker.summary = "no completion sentinel within timeout"
         worker.finished_at = time.time()
-        await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+        await self.store.upsert_worker(self.agentorchestr_session_id, worker_to_row(worker))
         return "timeout", worker.summary
 
     async def kill_worker(self, worker_id: str) -> None:
@@ -484,7 +484,7 @@ class WorkerPool:
         worker.state = "killed"
         worker.summary = worker.summary or "killed by supervisor"
         worker.finished_at = time.time()
-        await self.store.upsert_worker(self.orch_session_id, worker_to_row(worker))
+        await self.store.upsert_worker(self.agentorchestr_session_id, worker_to_row(worker))
 
     # ── teardown ──────────────────────────────────────────────────────
 

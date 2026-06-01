@@ -54,7 +54,7 @@ _SKIP_DIRS = {
     ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv",
     ".env", "venv", "env", "dist", "build", "out", "target",
     ".idea", ".vscode", ".pytest_cache", ".mypy_cache", "coverage",
-    ".next", ".nuxt", ".cache", ".orch",
+    ".next", ".nuxt", ".cache", ".agentorchestr",
 }
 
 

@@ -4,8 +4,8 @@ core/context_manager.py
 Three-tier memory system inspired by Claude Code's CLAUDE.md + auto memory.
 
 Tier 1: Session memory (in-process, ephemeral, compressed every N cycles)
-Tier 2: Project memory (.orch/MEMORY.md + topic files, persistent)
-Tier 3: Global memory (~/.orch/global_memory.md, persistent across projects)
+Tier 2: Project memory (.agentorchestr/MEMORY.md + topic files, persistent)
+Tier 3: Global memory (~/.agentorchestr/global_memory.md, persistent across projects)
 
 Also handles JIT context injection and output key substitution.
 """
@@ -17,10 +17,10 @@ from typing import Optional
 
 from router import LLMRouter
 
-MEMORY_DIR = ".orch/memory"
-MEMORY_INDEX = ".orch/MEMORY.md"
-CONVENTIONS_FILE = ".orch/conventions.md"
-GLOBAL_MEMORY = os.path.expanduser("~/.orch/global_memory.md")
+MEMORY_DIR = ".agentorchestr/memory"
+MEMORY_INDEX = ".agentorchestr/MEMORY.md"
+CONVENTIONS_FILE = ".agentorchestr/conventions.md"
+GLOBAL_MEMORY = os.path.expanduser("~/.agentorchestr/global_memory.md")
 
 # Token budgets
 MAX_FILE_CHARS = 3000
@@ -163,7 +163,7 @@ Completed tasks:
                 f.write(entry)
 
     def _read_project_memory(self) -> str:
-        """Read project-level memory from .orch/MEMORY.md."""
+        """Read project-level memory from .agentorchestr/MEMORY.md."""
         index_path = self.project_root / MEMORY_INDEX
         if not index_path.exists():
             return ""
@@ -177,7 +177,7 @@ Completed tasks:
             return ""
 
     def _read_conventions(self) -> str:
-        """Read project conventions from .orch/conventions.md."""
+        """Read project conventions from .agentorchestr/conventions.md."""
         conv_path = self.project_root / CONVENTIONS_FILE
         if not conv_path.exists():
             return ""

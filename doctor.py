@@ -4,7 +4,7 @@ doctor.py — comprehensive health check
 
 Run via:
 
-    orch --doctor
+    agentorchestr --doctor
 
 Validates every dependency and environment piece agentorchestr relies
 on, prints a colourised report, and exits 0 (healthy) / 1 (degraded).
@@ -24,7 +24,7 @@ Checks, in order:
   7. CLI agents detected on PATH  (delegated to AgentDetector)
   8. LLM keys configured  (delegated to LLMRouter.provider_status)
   9. Write access to XDG global state dir
- 10. Write access to project's .orch/ if --init was run
+ 10. Write access to project's .agentorchestr/ if --init was run
 """
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def run_doctor(available_agents: list[dict], llm) -> int:
         rows.append((
             "warn", "llm", "no keys configured",
             "Set ANTHROPIC_API_KEY (cache wins) or any free-tier key. "
-            "Auto mode runs on the agents' own auth, but ORCH's router needs a key.",
+            "Auto mode runs on the agents' own auth, but agentorchestr's router needs a key.",
         ))
 
     # ── 9. XDG dirs writable ─────────────────────────────────────
@@ -180,15 +180,15 @@ def run_doctor(available_agents: list[dict], llm) -> int:
     except Exception as e:
         rows.append(("warn", "xdg", f"paths module error: {e}", ""))
 
-    # ── 10. project .orch/ ─────────────────────────────────────────
-    project_orch = Path(os.getcwd()) / ".orch"
-    if project_orch.exists():
-        rows.append(("ok", "project", str(project_orch), ""))
+    # ── 10. project .agentorchestr/ ─────────────────────────────────────────
+    project_agentorch_dir = Path(os.getcwd()) / ".agentorchestr"
+    if project_agentorch_dir.exists():
+        rows.append(("ok", "project", str(project_agentorch_dir), ""))
     else:
         rows.append((
             "info", "project",
-            f"no .orch/ in {os.getcwd()}",
-            "Run [cyan]orch --init[/cyan] inside your project to scaffold it.",
+            f"no .agentorchestr/ in {os.getcwd()}",
+            "Run [cyan]agentorchestr --init[/cyan] inside your project to scaffold it.",
         ))
 
     # ── render ────────────────────────────────────────────────────
@@ -236,8 +236,8 @@ def run_doctor(available_agents: list[dict], llm) -> int:
 
     console.print(Panel(
         f"[green]{counts['ok']} checks passed.[/green]\n"
-        "agentorchestr is ready. Try [cyan]orch --setup[/cyan] in a project,\n"
-        "then [cyan]orch --interactive[/cyan].",
+        "agentorchestr is ready. Try [cyan]agentorchestr --setup[/cyan] in a project,\n"
+        "then [cyan]agentorchestr --interactive[/cyan].",
         border_style="green", title="[green]healthy[/green]",
     ))
     return 0

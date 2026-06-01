@@ -2,20 +2,20 @@
 discovery.py — find agents the supervisor didn't spawn
 ========================================================
 
-Use case: the user opens `orch-shim kiro chat` in terminal 1 and
-`orch-shim claude code` in terminal 2, then later runs ORCH from
-terminal 3. ORCH needs to discover those existing workers without
+Use case: the user opens `agentorchestr-shim kiro chat` in terminal 1 and
+`agentorchestr-shim claude code` in terminal 2, then later runs agentorchestr from
+terminal 3. agentorchestr needs to discover those existing workers without
 the user explicitly listing them.
 
 Three layers, tried in order, results merged:
 
   1. mDNS (zeroconf)  — preferred when the shim is running and the
-     `zeroconf` extra is installed. Service type `_orch-agent._tcp.local.`
+     `zeroconf` extra is installed. Service type `_agentorchestr-agent._tcp.local.`
      Catches shims on this host AND across the local network.
-  2. Filesystem       — every shim drops $XDG_RUNTIME_DIR/orch-agents/<pid>.json.
+  2. Filesystem       — every shim drops $XDG_RUNTIME_DIR/agentorchestr-agents/<pid>.json.
      Guaranteed to work on a single host even when zeroconf is unavailable.
   3. tmux scan        — `tmux list-panes -a` filtered by known agent
-     binaries. Catches agents NOT wrapped by orch-shim (best-effort, you
+     binaries. Catches agents NOT wrapped by agentorchestr-shim (best-effort, you
      can only send keys + capture-pane, no structured RPC).
 
 Everything is cheap: full discovery completes in <100 ms typical.
@@ -33,9 +33,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-# Match orch_shim's defaults.
-SHIM_SOCK_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/run-{os.getuid()}") / "orch-agents"
-MDNS_SERVICE_TYPE = "_orch-agent._tcp.local."
+# Match agentorchestr_shim's defaults.
+SHIM_SOCK_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/run-{os.getuid()}") / "agentorchestr-agents"
+MDNS_SERVICE_TYPE = "_agentorchestr-agent._tcp.local."
 
 # Agent binaries we recognise when falling back to bare-tmux scanning.
 # Keep aligned with agent_detector.AGENT_REGISTRY's primary command names.
@@ -73,7 +73,7 @@ class DiscoveredAgent:
 # ── Layer 1: mDNS ──────────────────────────────────────────────────────
 
 async def _discover_mdns(timeout: float = 1.0) -> list[DiscoveredAgent]:
-    """Browse `_orch-agent._tcp.local.` and return discovered shims."""
+    """Browse `_agentorchestr-agent._tcp.local.` and return discovered shims."""
     try:
         from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf  # type: ignore
         from zeroconf import ServiceStateChange  # type: ignore
@@ -191,7 +191,7 @@ def _discover_tmux() -> list[DiscoveredAgent]:
         # current_command is the immediate process; if a wrapper like
         # `bash -lc "kiro chat"` is running, current_command is 'bash' —
         # so we also scan the full pane title. This intentionally errs
-        # on the side of recall over precision; ORCH validates separately.
+        # on the side of recall over precision; agentorchestr validates separately.
         r = subprocess.run(
             ["tmux", "list-panes", "-a", "-F",
              "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_title}"],
@@ -262,7 +262,7 @@ async def discover(*, mdns_timeout: float = 1.0,
 # ── lightweight client to talk to a discovered shim ────────────────────
 
 class ShimClient:
-    """Minimal JSON-RPC over Unix socket; matches orch_shim's protocol."""
+    """Minimal JSON-RPC over Unix socket; matches agentorchestr_shim's protocol."""
 
     def __init__(self, socket_path: str):
         self.socket_path = socket_path

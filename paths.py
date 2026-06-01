@@ -1,27 +1,27 @@
 """
-paths.py — single source of truth for ORCH filesystem layout
+paths.py — single source of truth for agentorchestr filesystem layout
 ==============================================================
 
-ORCH separates global, per-project, and per-session state.  The exact
+agentorchestr separates global, per-project, and per-session state.  The exact
 locations follow the XDG Base Directory specification on Linux/macOS,
 with a backward-compatibility layer for installations that still keep
-state under ``~/.orch/``.
+state under ``~/.agentorchestr/``.
 
 Layout (XDG-compliant; defaults shown):
 
     Global (cross-project):
-        $XDG_CONFIG_HOME/orch/         (~/.config/orch)
+        $XDG_CONFIG_HOME/agentorchestr/         (~/.config/agentorchestr)
             mcp.json                    optional global MCP overrides
             hooks.json                  optional global hooks
-        $XDG_DATA_HOME/orch/           (~/.local/share/orch)
+        $XDG_DATA_HOME/agentorchestr/           (~/.local/share/agentorchestr)
             state.db                    sqlite — sessions, workers, op_log
             skills/                     installed skill bundles
             memory/                     global markdown memory (cross-project)
-        $XDG_CACHE_HOME/orch/          (~/.cache/orch)
+        $XDG_CACHE_HOME/agentorchestr/          (~/.cache/agentorchestr)
             (research / embedding caches if we ever externalise them)
 
     Per-project (in your repo, git-trackable):
-        <project>/.orch/
+        <project>/.agentorchestr/
             PROJECT.md                  project context (auto-loaded as preamble)
             CONVENTIONS.md              style/lint/test rules (auto-loaded)
             MEMORY.md                   index of session learnings
@@ -33,15 +33,15 @@ Layout (XDG-compliant; defaults shown):
             skills/                     project-pinned skills (override globals)
 
     Per-session (ephemeral, lives in /tmp):
-        /tmp/orch-<sid>/
+        /tmp/agentorchestr-<sid>/
             supervisor_prompt.txt
             progress.log
 
 Backward compat
 ---------------
-If ``~/.orch/`` exists (the pre-XDG layout) we keep using it for global
+If ``~/.agentorchestr/`` exists (the pre-XDG layout) we keep using it for global
 state.  This means installs that predate this module just keep working;
-new installs use the XDG layout.  ``orch init`` scaffolds per-project
+new installs use the XDG layout.  ``agentorchestr init`` scaffolds per-project
 directories regardless.
 """
 from __future__ import annotations
@@ -73,17 +73,17 @@ def xdg_cache_home() -> Path:
     return _xdg("XDG_CACHE_HOME", ".cache")
 
 
-# ── ORCH global paths ───────────────────────────────────────────────────
+# ── agentorchestr global paths ───────────────────────────────────────────────────
 
-LEGACY_HOME = Path.home() / ".orch"
+LEGACY_HOME = Path.home() / ".agentorchestr"
 
 
 def _use_legacy() -> bool:
-    """Existing installs that already have ~/.orch keep using it.
+    """Existing installs that already have ~/.agentorchestr keep using it.
 
     This avoids silently moving a user's state.db to a new location on
     upgrade — which would look like data loss.  New installs (no
-    ~/.orch directory) get the XDG layout from the start.
+    ~/.agentorchestr directory) get the XDG layout from the start.
     """
     return LEGACY_HOME.exists()
 
@@ -91,7 +91,7 @@ def _use_legacy() -> bool:
 def global_config_dir() -> Path:
     if _use_legacy():
         return LEGACY_HOME
-    p = xdg_config_home() / "orch"
+    p = xdg_config_home() / "agentorchestr"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -99,7 +99,7 @@ def global_config_dir() -> Path:
 def global_data_dir() -> Path:
     if _use_legacy():
         return LEGACY_HOME
-    p = xdg_data_home() / "orch"
+    p = xdg_data_home() / "agentorchestr"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -107,7 +107,7 @@ def global_data_dir() -> Path:
 def global_cache_dir() -> Path:
     if _use_legacy():
         return LEGACY_HOME / "cache"
-    p = xdg_cache_home() / "orch"
+    p = xdg_cache_home() / "agentorchestr"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -131,18 +131,18 @@ def global_memory_dir() -> Path:
 
 # ── per-project paths ───────────────────────────────────────────────────
 
-def project_orch_dir(project_root: str | Path) -> Path:
-    return Path(project_root).resolve() / ".orch"
+def project_agentorch_dir(project_root: str | Path) -> Path:
+    return Path(project_root).resolve() / ".agentorchestr"
 
 
 def project_memory_dir(project_root: str | Path) -> Path:
-    return project_orch_dir(project_root) / "memory"
+    return project_agentorch_dir(project_root) / "memory"
 
 
 # ── per-session paths ───────────────────────────────────────────────────
 
 def session_tmp_dir(session_id: str) -> Path:
-    p = Path(f"/tmp/orch-{session_id}")
+    p = Path(f"/tmp/agentorchestr-{session_id}")
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -152,7 +152,7 @@ def session_tmp_dir(session_id: str) -> Path:
 PROJECT_MD_TEMPLATE = """\
 # PROJECT.md
 
-> Auto-loaded by ORCH at the start of every session as the per-project
+> Auto-loaded by agentorchestr at the start of every session as the per-project
 > cacheable preamble.  Keep this short — every byte here is re-paid on
 > every supervisor turn.  Move long-form details into skills/ or
 > memory/topics/ which are loaded only when relevant.
@@ -195,7 +195,7 @@ CONVENTIONS_MD_TEMPLATE = """\
 
 HOOKS_JSON_TEMPLATE = """\
 {
-  "_doc": "ORCH lifecycle hooks. Each value is a shell command run with the event JSON on stdin. See hooks.py EVENTS for the full list.",
+  "_doc": "agentorchestr lifecycle hooks. Each value is a shell command run with the event JSON on stdin. See hooks.py EVENTS for the full list.",
   "pre_session": null,
   "post_session": null,
   "pre_task": null,
@@ -205,23 +205,23 @@ HOOKS_JSON_TEMPLATE = """\
 """
 
 GITIGNORE_LINES = [
-    "# ORCH per-project state — keep markdown, exclude transient artefacts",
-    ".orch/cache/",
-    ".orch/*.log",
-    ".orch/skills/*/  # remove this line to git-track installed skills",
+    "# agentorchestr per-project state — keep markdown, exclude transient artefacts",
+    ".agentorchestr/cache/",
+    ".agentorchestr/*.log",
+    ".agentorchestr/skills/*/  # remove this line to git-track installed skills",
     "",
 ]
 
 
 def init_project(project_root: str | Path, *, force: bool = False) -> dict:
-    """Scaffold ``<project>/.orch/`` with the recommended files.
+    """Scaffold ``<project>/.agentorchestr/`` with the recommended files.
 
     Idempotent: existing files are left alone unless ``force=True``,
     in which case they're overwritten.  Returns a dict mapping each
     written / skipped path to its action ("created" | "kept" | "overwrote").
     """
     root = Path(project_root).resolve()
-    orch = root / ".orch"
+    ao = root / ".agentorchestr"
     actions: dict[str, str] = {}
 
     files = {
@@ -229,15 +229,15 @@ def init_project(project_root: str | Path, *, force: bool = False) -> dict:
         "CONVENTIONS.md": CONVENTIONS_MD_TEMPLATE,
         "hooks.json": HOOKS_JSON_TEMPLATE,
     }
-    orch.mkdir(parents=True, exist_ok=True)
-    (orch / "memory").mkdir(parents=True, exist_ok=True)
-    (orch / "memory" / "topics").mkdir(parents=True, exist_ok=True)
-    (orch / "memory" / "episodes").mkdir(parents=True, exist_ok=True)
-    (orch / "memory" / "research").mkdir(parents=True, exist_ok=True)
-    (orch / "skills").mkdir(parents=True, exist_ok=True)
+    ao.mkdir(parents=True, exist_ok=True)
+    (ao / "memory").mkdir(parents=True, exist_ok=True)
+    (ao / "memory" / "topics").mkdir(parents=True, exist_ok=True)
+    (ao / "memory" / "episodes").mkdir(parents=True, exist_ok=True)
+    (ao / "memory" / "research").mkdir(parents=True, exist_ok=True)
+    (ao / "skills").mkdir(parents=True, exist_ok=True)
 
     for name, body in files.items():
-        path = orch / name
+        path = ao / name
         if path.exists() and not force:
             actions[str(path)] = "kept"
             continue

@@ -37,12 +37,12 @@ def _default_global_dir() -> Path:
         from paths import global_memory_dir
         return global_memory_dir()
     except Exception:
-        return Path(os.path.expanduser("~/.orch/memory"))
+        return Path(os.path.expanduser("~/.agentorchestr/memory"))
 
 
 GLOBAL_DIR = _default_global_dir()
-PROJECT_DIR_NAME = ".orch/memory"
-INDEX_DB = ".orch/memory/index.sqlite"
+PROJECT_DIR_NAME = ".agentorchestr/memory"
+INDEX_DB = ".agentorchestr/memory/index.sqlite"
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"   # 384-d, ~30 ms/sentence on CPU
 EMBED_DIM = 384
@@ -159,7 +159,7 @@ class MemoryFederation:
                               *, ttl_hours: float = 24.0) -> None:
         """Persist a research payload as a 'research' note keyed by query.
 
-        Stored under <project>/.orch/memory/research/<safe>.md as plain
+        Stored under <project>/.agentorchestr/memory/research/<safe>.md as plain
         markdown (so a human can read / git-track it) AND mirrored into
         the FTS / vec index so future workers retrieve it by topic.
         TTL is recorded in the note header; get_cached_research enforces it.
@@ -280,7 +280,7 @@ class MemoryFederation:
         # Project: PROJECT.md + CONVENTIONS.md if present (live in project root, not memory/)
         for name in ("PROJECT.md", "CONVENTIONS.md"):
             for candidate in (self.project_root / name,
-                              self.project_root / ".orch" / name):
+                              self.project_root / ".agentorchestr" / name):
                 if candidate.exists():
                     parts.append(
                         f"# {name}\n\n{_read_text(candidate, max_chars=4000)}"
@@ -422,7 +422,7 @@ class MemoryFederation:
         ttl_s = ttl_hours * 3600.0
         cached_at = time.time()
         header = (
-            f"<!--orch-research v1\n"
+            f"<!--agentorchestr-research v1\n"
             f"query={query}\n"
             f"cached_at={cached_at}\n"
             f"ttl_s={ttl_s}\n"
@@ -435,7 +435,7 @@ class MemoryFederation:
         )
 
     _RESEARCH_HEADER_RE = re.compile(
-        r"<!--orch-research v1\s*\n"
+        r"<!--agentorchestr-research v1\s*\n"
         r"query=(?P<query>.*?)\s*\n"
         r"cached_at=(?P<cached_at>[\d.]+)\s*\n"
         r"ttl_s=(?P<ttl>[\d.]+)\s*\n-->",

@@ -259,7 +259,7 @@ async def test_fetch_memory_context_renders_research_envelope(pool):
         "error": None,
     }
     body = (
-        "<!--orch-research v1\n"
+        "<!--agentorchestr-research v1\n"
         "query=fastapi 0.115 changes\n"
         "fetched_at=1.0\n"
         "ttl_s=86400\n-->\n"
@@ -275,7 +275,7 @@ async def test_fetch_memory_context_renders_research_envelope(pool):
     pool.memory = _StubMem()
     out = await pool._fetch_memory_context("anything")
     # The raw JSON envelope must NOT appear; the rendered form does.
-    assert "<!--orch-research" not in out
+    assert "<!--agentorchestr-research" not in out
     assert "Web research: fastapi 0.115 changes" in out
     assert "FastAPI 0.115 release" in out
     assert "https://fastapi.tiangolo.com/release-notes" in out

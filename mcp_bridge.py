@@ -77,7 +77,7 @@ def build_supervisor_app(
             "mcp library not installed. Run: pip install 'mcp>=1.20'"
         )
 
-    mcp = FastMCP("orch-supervisor", host=host, port=port)
+    mcp = FastMCP("agentorchestr-supervisor", host=host, port=port)
     agents_by_name = {a["name"]: a for a in available_agents}
 
     def _resolve_agent(hint: str | None) -> dict:
@@ -231,7 +231,7 @@ def build_supervisor_app(
     @mcp.tool()
     def report_progress(message: str) -> str:
         """Append a progress note (visible in the dashboard)."""
-        log = Path(f"/tmp/orch-{pool.orch_session_id}/progress.log")
+        log = Path(f"/tmp/agentorchestr-{pool.agentorchestr_session_id}/progress.log")
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a") as f:
             f.write(message.rstrip() + "\n")
@@ -324,7 +324,7 @@ def build_supervisor_app(
     async def compact_session(keep_last_n: int = 3,
                                include_running: bool = False) -> str:
         """Rewrite older finished workers' summaries as short stubs to keep the context window below 70%."""
-        rows = await pool.store.get_workers(pool.orch_session_id)
+        rows = await pool.store.get_workers(pool.agentorchestr_session_id)
         # Order: oldest first.
         rows.sort(key=lambda r: r.get("started_at") or 0.0)
         finished = [
@@ -345,7 +345,7 @@ def build_supervisor_app(
             )
             r2 = dict(r)
             r2["summary"] = new_summary
-            await pool.store.upsert_worker(pool.orch_session_id, r2)
+            await pool.store.upsert_worker(pool.agentorchestr_session_id, r2)
             compacted_count += 1
 
         return json.dumps({
@@ -356,10 +356,10 @@ def build_supervisor_app(
 
     @mcp.tool()
     def clear_tool_results(progress_log: bool = True) -> str:
-        """Truncate /tmp/orch-<session>/progress.log to drop noise from the next iteration."""
+        """Truncate /tmp/agentorchestr-<session>/progress.log to drop noise from the next iteration."""
         cleared: list[str] = []
         if progress_log:
-            log = Path(f"/tmp/orch-{pool.orch_session_id}/progress.log")
+            log = Path(f"/tmp/agentorchestr-{pool.agentorchestr_session_id}/progress.log")
             if log.exists():
                 try:
                     log.write_text("")  # truncate
@@ -378,17 +378,17 @@ def write_mcp_config(port: int = 8765, transport: str = "sse") -> None:
     url = f"http://localhost:{port}/sse"
     config = {
         "mcpServers": {
-            "orch": {
+            "agentorchestr": {
                 "url": url if transport == "sse" else None,
                 "command": "python" if transport == "stdio" else None,
                 "args": [str(Path(__file__).resolve()), "--transport", "stdio"]
                         if transport == "stdio" else None,
-                "description": "ORCH supervisor bridge",
+                "description": "agentorchestr supervisor bridge",
             }
         }
     }
-    config["mcpServers"]["orch"] = {
-        k: v for k, v in config["mcpServers"]["orch"].items() if v is not None
+    config["mcpServers"]["agentorchestr"] = {
+        k: v for k, v in config["mcpServers"]["agentorchestr"].items() if v is not None
     }
     locations = {
         "Kiro":        os.path.expanduser("~/.kiro/settings/mcp.json"),
@@ -404,7 +404,7 @@ def write_mcp_config(port: int = 8765, transport: str = "sse") -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ORCH supervisor MCP bridge")
+    parser = argparse.ArgumentParser(description="agentorchestr supervisor MCP bridge")
     parser.add_argument("--transport", choices=["sse", "stdio", "streamable-http"], default="sse")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)

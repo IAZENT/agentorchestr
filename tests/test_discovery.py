@@ -20,7 +20,7 @@ import discovery
 
 @pytest.fixture
 def fake_sock_dir(tmp_path, monkeypatch):
-    d = tmp_path / "orch-agents"
+    d = tmp_path / "agentorchestr-agents"
     d.mkdir()
     monkeypatch.setattr(discovery, "SHIM_SOCK_DIR", d)
     return d

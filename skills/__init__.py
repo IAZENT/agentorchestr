@@ -18,14 +18,14 @@ Triggers decide when the skill's prompt gets injected:
 
 Distribution is git-clone-based:
 
-    orch skill add github.com/cosmic/python-fastapi-jwt
-    orch skill list
-    orch skill verify python-fastapi-jwt
-    orch skill remove python-fastapi-jwt
+    agentorchestr skill add github.com/cosmic/python-fastapi-jwt
+    agentorchestr skill list
+    agentorchestr skill verify python-fastapi-jwt
+    agentorchestr skill remove python-fastapi-jwt
 
 Public API:
 
-    SkillRegistry(skills_dir=~/.orch/skills)
+    SkillRegistry(skills_dir=~/.agentorchestr/skills)
         .reload()
         .all() -> list[Skill]
         .matching(task, file_scope) -> list[Skill]

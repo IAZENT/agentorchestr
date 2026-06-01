@@ -26,7 +26,7 @@ class _FailingMCP:
 class _NoopPool:
     """The minimum pool surface Supervisor.run() / Supervisor.cleanup() touch."""
     def __init__(self):
-        self.tmux_session_name = "orch-fake"
+        self.tmux_session_name = "agentorchestr-fake"
         self.host = "127.0.0.1"
         self._started: list[list[str]] = []
 

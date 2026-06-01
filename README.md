@@ -29,7 +29,7 @@ into a proprietary stack.
 ```bash
 pipx install agentorchestr           # once published
 # or, from source:
-git clone https://github.com/IAZENT/ORCH && cd ORCH
+git clone https://github.com/IAZENT/agentorchestr && cd agentorchestr
 python3 -m venv .env && source .env/bin/activate
 pip install -e ".[dev]"
 ```
@@ -47,60 +47,60 @@ export OPENROUTER_API_KEY=...  # 28+ free models
 Verify your setup:
 
 ```bash
-orch --detect
+agentorchestr --detect
 ```
 
 ---
 
 ## Quickstart
 
-In any project you want ORCH to know about:
+In any project you want agentorchestr to know about:
 
 ```bash
-orch --init                              # scaffold .orch/ for this project
-orch --interactive                       # paste a multi-line goal, pick agents
+agentorchestr --init                              # scaffold .agentorchestr/ for this project
+agentorchestr --interactive                       # paste a multi-line goal, pick agents
 # or:
-orch --goal "Add JWT auth to /api/users"
-orch --goal-file design-doc.md           # for long goals
+agentorchestr --goal "Add JWT auth to /api/users"
+agentorchestr --goal-file design-doc.md           # for long goals
 ```
 
-ORCH attaches you to the supervisor's tmux session automatically. Use
+agentorchestr attaches you to the supervisor's tmux session automatically. Use
 `Ctrl-B D` to detach without killing it. To reconnect later:
 
 ```bash
-tmux attach -t orch-<session_id>
-orch --list-sessions
-orch --resume <session_id>
+tmux attach -t agentorchestr-<session_id>
+agentorchestr --list-sessions
+agentorchestr --resume <session_id>
 ```
 
 ---
 
 ## Filesystem layout
 
-ORCH follows the
+agentorchestr follows the
 [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/latest/).
 
 | Scope        | Path                                                            | Holds                                                      |
 | ------------ | --------------------------------------------------------------- | ---------------------------------------------------------- |
-| Global state | `$XDG_DATA_HOME/orch/` (default `~/.local/share/orch/`)         | `state.db`, installed `skills/`, cross-project `memory/`   |
-| Global config| `$XDG_CONFIG_HOME/orch/` (default `~/.config/orch/`)            | global hooks / overrides                                   |
-| Per-project  | `<project>/.orch/`                                              | `PROJECT.md`, `CONVENTIONS.md`, `memory/`, `hooks.json`    |
-| Per-session  | `/tmp/orch-<sid>/`                                              | ephemeral prompt + progress log                            |
+| Global state | `$XDG_DATA_HOME/agentorchestr/` (default `~/.local/share/agentorchestr/`)         | `state.db`, installed `skills/`, cross-project `memory/`   |
+| Global config| `$XDG_CONFIG_HOME/agentorchestr/` (default `~/.config/agentorchestr/`)            | global hooks / overrides                                   |
+| Per-project  | `<project>/.agentorchestr/`                                              | `PROJECT.md`, `CONVENTIONS.md`, `memory/`, `hooks.json`    |
+| Per-session  | `/tmp/agentorchestr-<sid>/`                                              | ephemeral prompt + progress log                            |
 
-Existing installations with `~/.orch/` keep using it — ORCH never
+Existing installations with `~/.agentorchestr/` keep using it — agentorchestr never
 silently moves your data.
 
 ---
 
 ## Per-project context
 
-`orch --init` creates `<project>/.orch/PROJECT.md` and
+`agentorchestr --init` creates `<project>/.agentorchestr/PROJECT.md` and
 `CONVENTIONS.md`. They are auto-loaded into the cacheable preamble of
 every supervisor turn, so each byte you write here pays back across
 every task in that project. Keep them short.
 
 ```
-.orch/
+.agentorchestr/
 ├── PROJECT.md       # stack, architecture, verify commands
 ├── CONVENTIONS.md   # style, naming, test rules
 ├── memory/
@@ -120,17 +120,17 @@ Skills are git-clone-able bundles (instructions + optional MCP servers
 match a task.
 
 ```bash
-orch --skill-add github.com/<author>/<skill-name>
-orch --skill-list
-orch --skill-verify <skill-name>
-orch --skill-remove <skill-name>
-orch --goal "..." --require-signed-skills   # production
+agentorchestr --skill-add github.com/<author>/<skill-name>
+agentorchestr --skill-list
+agentorchestr --skill-verify <skill-name>
+agentorchestr --skill-remove <skill-name>
+agentorchestr --goal "..." --require-signed-skills   # production
 ```
 
 A skill is just a directory:
 
 ```
-~/.local/share/orch/skills/<skill-name>/
+~/.local/share/agentorchestr/skills/<skill-name>/
 ├── skill.toml         # name, version, triggers (keywords + file_globs)
 ├── skill.md           # markdown injected into matching workers' prompts
 ├── signature.sig      # optional ed25519 signature
@@ -148,7 +148,7 @@ surface:
 web_research("FastAPI 0.115 dependency injection")
 ```
 
-Results land in `<project>/.orch/memory/research/*.md`, are git-trackable,
+Results land in `<project>/.agentorchestr/memory/research/*.md`, are git-trackable,
 indexed by FTS5, and cached for 24 h — so a follow-up implementer
 worker inherits the same facts at zero token cost.
 
@@ -166,25 +166,25 @@ Optional dep: `pip install ddgs`. Without it, `web_research` returns
 
 ## Cross-terminal worker pool
 
-Wrap any CLI agent so ORCH can find and drive it from other terminals:
+Wrap any CLI agent so agentorchestr can find and drive it from other terminals:
 
 ```bash
 # Terminal 1
-$ orch-shim claude
+$ agentorchestr-shim claude
 
 # Terminal 2
-$ orch-shim kiro chat
+$ agentorchestr-shim kiro chat
 
 # Terminal 3
-$ orch --goal "build the auth module"
+$ agentorchestr --goal "build the auth module"
 ```
 
 The supervisor's MCP surface gains `discover_running_agents()`,
 `send_to_external_agent()`, `read_from_external_agent()`. Three
 discovery layers run in order:
 
-1. mDNS via `_orch-agent._tcp.local.` (when `zeroconf` is installed)
-2. Filesystem cards under `$XDG_RUNTIME_DIR/orch-agents/`
+1. mDNS via `_agentorchestr-agent._tcp.local.` (when `zeroconf` is installed)
+2. Filesystem cards under `$XDG_RUNTIME_DIR/agentorchestr-agents/`
 3. Bare tmux pane scan as a last resort
 
 ---
@@ -208,7 +208,7 @@ discovery layers run in order:
 ## Dashboard
 
 ```bash
-orch --dashboard            # http://localhost:3000
+agentorchestr --dashboard            # http://localhost:3000
 ```
 
 `/api/sessions`, `/api/sessions/<id>`, `/api/sessions/<id>/workers`,
@@ -224,7 +224,7 @@ orch --dashboard            # http://localhost:3000
 | `--goal-file PATH`              | read goal from a UTF-8 file                      |
 | `--interactive`                 | paste a multi-line goal (`/end` to submit)       |
 | `--manual --task "..."`         | single agent, single task, no supervisor         |
-| `--init [--init-force]`         | scaffold this project's `.orch/`                 |
+| `--init [--init-force]`         | scaffold this project's `.agentorchestr/`                 |
 | `--detect`                      | show installed agents + LLM keys + dependencies  |
 | `--list-sessions`               | recent sessions, resumable ones flagged          |
 | `--resume <id>`                 | pick up a paused or crashed session              |

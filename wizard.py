@@ -8,7 +8,7 @@ Two flows:
         1. Show every detected agent with capability stats.
         2. Ask which is the LEAD (default: highest orchestrate score).
         3. Ask which agents go in the WORKER POOL (multi-select).
-        4. Ask the worker count.  N > pool size is allowed: ORCH cycles
+        4. Ask the worker count.  N > pool size is allowed: agentorchestr cycles
            through the pool so e.g. 1 agent + count=3 spawns 3 sessions
            of the same agent in parallel — exactly what the user asked
            for ("can use a single agent with multiple session as multiple
@@ -32,7 +32,6 @@ from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
-from rich.table import Table
 
 import complexity
 import preferences
@@ -80,24 +79,25 @@ def run(available: list[dict], project_root: str) -> Optional[Layout]:
     if not available:
         console.print(
             "[red]No CLI agents detected on PATH. Install at least one — "
-            "see `orch --detect` for the list.[/red]"
+            "see `agentorchestr --detect` for the list.[/red]"
         )
         return None
 
     try:
-        _show_welcome()
-        _show_available(available)
-
-        mode = Prompt.ask(
-            "\nHow should agentorchestr decide who does what?",
-            choices=["manual", "automatic", "skip"],
-            default="automatic",
+        console.print("\n[bold]Select operating mode:[/bold]")
+        console.print("  [cyan]1.[/cyan] Automatic — detect project complexity, pick agents for you")
+        console.print("  [cyan]2.[/cyan] Manual    — choose lead and workers yourself")
+        console.print("  [cyan]3.[/cyan] Skip      — use defaults, no customisation")
+        choice = IntPrompt.ask(
+            "\n[bold]Mode[/bold]",
+            choices=["1", "2", "3"],
+            default=1,
         )
-        if mode == "skip":
-            console.print("[dim]Skipping wizard. You can re-run with --setup.[/dim]")
+        if choice == 3:
+            console.print("[dim]Skipping wizard. Re-run with [cyan]agentorchestr --setup[/cyan] any time.[/dim]")
             return None
 
-        layout = _automatic_flow(available, project_root) if mode == "automatic" \
+        layout = _automatic_flow(available, project_root) if choice == 1 \
             else _manual_flow(available)
 
         if layout is None:
@@ -113,7 +113,7 @@ def run(available: list[dict], project_root: str) -> Optional[Layout]:
         return layout
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]wizard cancelled — falling back to defaults. "
-                      "Re-run with [cyan]orch --setup[/cyan] any time.[/dim]")
+                      "Re-run with [cyan]agentorchestr --setup[/cyan] any time.[/dim]")
         return None
 
 
@@ -221,42 +221,6 @@ def _manual_flow(available: list[dict]) -> Optional[Layout]:
 
 
 # ── helpers ───────────────────────────────────────────────────────────
-
-def _show_welcome() -> None:
-    console.print(Panel(
-        "[bold]agentorchestr — first-run setup[/bold]\n\n"
-        "I'll detect your installed CLI agents, then either let you pick\n"
-        "the lead + worker layout yourself, or decide automatically based\n"
-        "on this project's complexity.\n\n"
-        "[dim]Re-run any time with [cyan]orch --setup[/cyan].\n"
-        "Skip non-interactively with [cyan]orch --no-setup[/cyan].[/dim]",
-        title="[green]welcome[/green]", border_style="green",
-    ))
-
-
-def _show_available(available: list[dict]) -> None:
-    table = Table(title="Available agents", title_style="bold cyan",
-                  show_header=True, header_style="cyan")
-    table.add_column("#", justify="right", style="cyan", no_wrap=True)
-    table.add_column("name", style="bold")
-    table.add_column("type")
-    table.add_column("orch", justify="right")
-    table.add_column("impl", justify="right")
-    table.add_column("flags", style="dim")
-    for i, a in enumerate(available, 1):
-        caps = a.get("capabilities", {})
-        flags = " ".join(filter(None, [
-            "parallel" if caps.get("parallel") else "",
-            "mcp" if caps.get("mcp") else "",
-        ]))
-        table.add_row(
-            str(i), a["name"], a["type"],
-            str(caps.get("orchestrate", "?")),
-            str(caps.get("implement", "?")),
-            flags,
-        )
-    console.print(table)
-
 
 def _summarize(layout: Layout) -> None:
     workers_str = ", ".join(w["name"] for w in layout.workers)
