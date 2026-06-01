@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-# Match agentorchestr_shim's defaults.
+# Match orch_shim's defaults.
 SHIM_SOCK_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/run-{os.getuid()}") / "agentorchestr-agents"
 MDNS_SERVICE_TYPE = "_agentorchestr-agent._tcp.local."
 
@@ -262,7 +262,7 @@ async def discover(*, mdns_timeout: float = 1.0,
 # ── lightweight client to talk to a discovered shim ────────────────────
 
 class ShimClient:
-    """Minimal JSON-RPC over Unix socket; matches agentorchestr_shim's protocol."""
+    """Minimal JSON-RPC over Unix socket; matches orch_shim's protocol."""
 
     def __init__(self, socket_path: str):
         self.socket_path = socket_path

@@ -46,8 +46,8 @@ dev = [
 ]
 
 [project.scripts]
-agentorchestr = "agentorchestrator:_sync_main"
-agentorchestr-shim = "agentorchestr_shim:main"
+agentorchestr = "orchestrator:_sync_main"
+agentorchestr-shim = "orch_shim:main"
 
 [project.urls]
 Homepage      = "https://github.com/IAZENT/agentorchestr"

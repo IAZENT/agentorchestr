@@ -1,4 +1,4 @@
-"""End-to-end test for agentorchestr_shim.
+"""End-to-end test for orch_shim.
 
 We use `cat` as a stand-in agent — it's universally available, takes
 stdin and echoes to stdout, and exits cleanly on EOF/SIGTERM.  This
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-import agentorchestr_shim
+import orch_shim
 from discovery import ShimClient
 
 
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(
 def shim_dir(tmp_path, monkeypatch):
     d = tmp_path / "agentorchestr-agents"
     d.mkdir()
-    monkeypatch.setattr(agentorchestr_shim, "SOCK_DIR", d)
+    monkeypatch.setattr(orch_shim, "SOCK_DIR", d)
     return d
 
 
@@ -54,16 +54,16 @@ async def test_shim_lifecycle_with_cat(shim_dir, monkeypatch):
     """Wrap `cat`, send 'hello\\n', read it back, then kill cleanly."""
     # Run the shim in a background task — we still use the same loop.
     # Disable mDNS to keep the test hermetic.
-    monkeypatch.setattr(agentorchestr_shim, "_try_advertise_mdns", lambda card: None)
+    monkeypatch.setattr(orch_shim, "_try_advertise_mdns", lambda card: None)
 
     # Replace the stdin/stdout bridges with no-ops so the test process
     # doesn't hang reading our own stdin.
     async def _noop(_agent):
         await asyncio.sleep(0)
-    monkeypatch.setattr(agentorchestr_shim, "_bridge_stdin", _noop)
-    monkeypatch.setattr(agentorchestr_shim, "_bridge_stdout", _noop)
+    monkeypatch.setattr(orch_shim, "_bridge_stdin", _noop)
+    monkeypatch.setattr(orch_shim, "_bridge_stdout", _noop)
 
-    shim_task = asyncio.create_task(agentorchestr_shim._run(["cat"]))
+    shim_task = asyncio.create_task(orch_shim._run(["cat"]))
     try:
         # Wait for the card + sock to materialise.
         ok = await _wait_for(lambda: any(p.suffix == ".json" for p in shim_dir.iterdir()))

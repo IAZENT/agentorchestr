@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agentorchestr_shim.py — wrap a CLI agent so agentorchestr supervisors can find and drive it
+orch_shim.py — wrap a CLI agent so agentorchestr supervisors can find and drive it
 ==========================================================================
 
 Usage:
