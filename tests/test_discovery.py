@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import discovery
+from agentorchestr import discovery
 
 
 @pytest.fixture

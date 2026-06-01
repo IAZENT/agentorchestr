@@ -47,4 +47,5 @@ jobs:
       - name: Smoke check entry points
         run: |
           agentorchestr --help > /dev/null
+          agentorchestr --version
           agentorchestr-shim --help > /dev/null

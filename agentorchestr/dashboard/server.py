@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from state_store import StateStore
+from agentorchestr.state_store import StateStore
 
 
 _HTML = """<!doctype html>

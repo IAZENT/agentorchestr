@@ -25,9 +25,9 @@ import socket
 from pathlib import Path
 from typing import Optional
 
-from mcp_bridge import build_supervisor_app, write_mcp_config
-from state_store import StateStore
-from worker_pool import WorkerPool
+from agentorchestr.mcp_bridge import build_supervisor_app, write_mcp_config
+from agentorchestr.state_store import StateStore
+from agentorchestr.worker_pool import WorkerPool
 
 
 SUPERVISOR_PROMPT_TEMPLATE = """\
@@ -77,25 +77,14 @@ def _free_port() -> int:
 
 def _supervisor_argv(lead: dict, prompt_path: str) -> list[str]:
     """argv to run the lead agent INTERACTIVELY with `prompt_path` as
-    its first user message. Mirrors worker_pool's _agent_argv but is
-    duplicated here intentionally so the supervisor's launch path can
-    diverge in the future (e.g. allow stdin streaming)."""
-    name = lead["name"]
-    cmd = lead["cmd"]
-    q = shlex.quote
-    if name in ("claude", "openclaude", "amp"):
-        return ["bash", "-lc", f"{q(cmd)} --dangerously-skip-permissions \"$(cat {q(prompt_path)})\""]
-    if name == "kiro" or cmd in ("kiro-cli", "kirocli"):
-        return ["bash", "-lc", f"{q(cmd)} chat --trust-all-tools \"$(cat {q(prompt_path)})\""]
-    if name == "opencode":
-        return ["bash", "-lc", f"{q(cmd)} run \"$(cat {q(prompt_path)})\""]
-    if name == "aider":
-        return ["bash", "-lc", f"{q(cmd)} --yes-always --message-file {q(prompt_path)}"]
-    if name == "codex":
-        return ["bash", "-lc", f"{q(cmd)} exec --full-auto \"$(cat {q(prompt_path)})\""]
-    if name == "gemini":
-        return ["bash", "-lc", f"{q(cmd)} --prompt \"$(cat {q(prompt_path)})\""]
-    return ["bash", "-lc", f"{q(cmd)} \"$(cat {q(prompt_path)})\""]
+    its first user message.
+
+    Thin delegate to agent_launcher.build_argv with role='supervisor', so
+    the worker-launch path in WorkerPool and this lead-launch path stay in
+    sync without a duplicated per-agent if/elif chain.
+    """
+    from agentorchestr.agent_launcher import build_argv
+    return build_argv(lead, prompt_path, role="supervisor")
 
 
 class Supervisor:

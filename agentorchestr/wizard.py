@@ -33,8 +33,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 
-import complexity
-import preferences
+from agentorchestr import complexity
+from agentorchestr import preferences
 
 console = Console()
 

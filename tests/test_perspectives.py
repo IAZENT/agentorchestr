@@ -1,7 +1,7 @@
 """Tests for the perspective system-prompt builder."""
 import pytest
 
-import perspectives
+from agentorchestr import perspectives
 
 
 def test_known_perspectives_are_valid():

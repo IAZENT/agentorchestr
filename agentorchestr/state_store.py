@@ -20,7 +20,7 @@ DB_PATH = Path.home() / ".agentorchestr" / "state.db"  # legacy default; overrid
 def _default_db_path() -> Path:
     """Resolve the default DB path lazily so tests / non-default XDG_DATA_HOME work."""
     try:
-        from paths import state_db_path
+        from agentorchestr.paths import state_db_path
         return state_db_path()
     except Exception:
         return DB_PATH

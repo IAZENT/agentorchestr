@@ -31,6 +31,26 @@ jobs:
           echo "Building version $VERSION"
       - name: Build wheel + sdist
         run: python -m build
+      - name: Sanity-check wheel contents
+        # A regression where pyproject.toml's package discovery was broken
+        # produced a 14 KB wheel that contained no Python code.  Fail
+        # the job loudly if that ever happens again.
+        run: |
+          set -euo pipefail
+          WHEEL=$(ls dist/*.whl | head -1)
+          SIZE=$(stat -c%s "$WHEEL")
+          echo "Wheel: $WHEEL ($SIZE bytes)"
+          if [ "$SIZE" -lt 50000 ]; then
+            echo "::error::Wheel is suspiciously small ($SIZE bytes); package discovery may be broken." >&2
+            unzip -l "$WHEEL"
+            exit 1
+          fi
+          if ! unzip -l "$WHEEL" | grep -q 'agentorchestr/orchestrator.py'; then
+            echo "::error::Wheel is missing agentorchestr/orchestrator.py." >&2
+            unzip -l "$WHEEL"
+            exit 1
+          fi
+          echo "✓ wheel sanity check passed"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

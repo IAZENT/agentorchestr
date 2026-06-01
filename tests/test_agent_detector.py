@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-import agent_detector
-from agent_detector import AgentDetector
+from agentorchestr import agent_detector
+from agentorchestr.agent_detector import AgentDetector
 
 
 def test_first_on_path_returns_first_match(monkeypatch):

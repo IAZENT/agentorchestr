@@ -16,7 +16,6 @@ env/
 # Environment variables (secrets)
 .env.local
 .env.*.local
-*.env
 
 # OS / editor
 .DS_Store
@@ -27,9 +26,13 @@ Thumbs.db
 *.swo
 *~
 
-# agentagentorchestrestr runtime artifacts
-.agentorchestr/
-~/.agentorchestr/
+# agentorchestr runtime artifacts (per-session ephemeral state goes here;
+# the per-project markdown that lives under .agentorchestr/ IS git-trackable
+# — see paths.py and the README — so we only ignore noise.)
+.agentorchestr/cache/
+.agentorchestr/*.log
+.agentorchestr/memory/index.sqlite
+.agentorchestr/memory/session_*.md
 
 # Local agent settings (user-specific)
 .openclaude/
@@ -41,10 +44,11 @@ Thumbs.db
 chathistory.json
 *.log
 
-# Databases
-*.db
-*.sqlite
-*.sqlite3
+# Databases (top-level only; in-repo .agentorchestr/memory/index.sqlite
+# is covered above.)
+/*.db
+/*.sqlite
+/*.sqlite3
 
 # Pytest / mypy / coverage
 .pytest_cache/
@@ -71,8 +75,8 @@ npm-debug.log*
 .docker/
 docker-compose.override.yml
 
-
-RESEARCH.md
-CHANGELOG.md
+# Working files (ignore drafts, but RESEARCH.md / CHANGELOG.md ARE tracked).
 NOTES.md
 TODO.md
+RESEARCH.md
+CHANGELOG.md

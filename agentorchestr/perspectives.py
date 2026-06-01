@@ -38,11 +38,19 @@ Working agreement:
     If the task genuinely requires touching a file outside scope, STOP
     and report it instead of editing.
   * Be concise. The supervisor reads only your last few hundred tokens.
-  * When you are finished, end your last message with one of these
-    sentinel lines on its own line so the supervisor can detect completion:
+
+Completion protocol — do BOTH of the following when finished:
+  1. End your last message with one of these sentinel lines on its own
+     line so the supervisor can detect completion in the pane scrollback:
         WORKER_DONE: <one-line summary of what changed>
         WORKER_BLOCKED: <one-line reason you cannot proceed>
         WORKER_FAILED: <one-line failure summary>
+  2. Also write the SAME state + summary atomically into
+     `.agentorchestr/done.flag` inside this worktree so the supervisor
+     detects completion even if your output scrolled past the buffer:
+        printf '%s\\n%s\\n' "done" "<summary>" > .agentorchestr/done.flag.tmp \\
+            && mv .agentorchestr/done.flag.tmp .agentorchestr/done.flag
+     The first line MUST be one of: done | blocked | failed.
 """
 
 # Per-perspective addenda. Keep each under ~120 tokens so the total

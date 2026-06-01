@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-import memory.federation as fed
-from memory import MemoryFederation, MemoryHit
+import agentorchestr.memory.federation as fed
+from agentorchestr.memory import MemoryFederation, MemoryHit
 
 
 @pytest.fixture

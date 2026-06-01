@@ -34,7 +34,7 @@ def _default_global_dir() -> Path:
     """Lazy default — checks paths.global_memory_dir() at call time so
     tests can monkeypatch GLOBAL_DIR without import-order pain."""
     try:
-        from paths import global_memory_dir
+        from agentorchestr.paths import global_memory_dir
         return global_memory_dir()
     except Exception:
         return Path(os.path.expanduser("~/.agentorchestr/memory"))

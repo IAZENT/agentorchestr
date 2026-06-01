@@ -244,19 +244,52 @@ def _match_agent(cmd: str, title: str) -> Optional[str]:
 
 # ── public API ─────────────────────────────────────────────────────────
 
+# Process-level cache so a supervisor calling discover() multiple times in
+# the same turn doesn't re-pay mDNS (~1s) + fs walk + tmux scan.  Cleared
+# automatically after `_DISCOVERY_CACHE_TTL` seconds.
+_DISCOVERY_CACHE_TTL = 2.0
+_discovery_cache: tuple[float, list[DiscoveredAgent]] | None = None
+
+
+def _can_skip_mdns() -> bool:
+    """Cheap probe: skip the mDNS layer entirely when zeroconf isn't
+    importable.  Saves ~1s per discover() call on hosts without zeroconf."""
+    try:
+        import zeroconf  # noqa: F401
+        return False
+    except ImportError:
+        return True
+
+
 async def discover(*, mdns_timeout: float = 1.0,
-                   include_tmux: bool = True) -> list[DiscoveredAgent]:
-    """Run all enabled discovery layers and merge by id (mDNS wins)."""
+                   include_tmux: bool = True,
+                   cache_ttl_s: float = _DISCOVERY_CACHE_TTL,
+                   force_refresh: bool = False) -> list[DiscoveredAgent]:
+    """Run all enabled discovery layers and merge by id (mDNS wins).
+
+    Cached for `cache_ttl_s` seconds.  Pass ``force_refresh=True`` to
+    bypass the cache (e.g. tests, or when a supervisor knows a new shim
+    just started).
+    """
+    global _discovery_cache
+    now = time.time()
+    if (not force_refresh) and _discovery_cache is not None:
+        ts, cached = _discovery_cache
+        if (now - ts) < cache_ttl_s:
+            return list(cached)
+
     fs_agents = _discover_filesystem()
     tmux_agents = _discover_tmux() if include_tmux else []
-    mdns_agents = await _discover_mdns(timeout=mdns_timeout)
+    mdns_agents = [] if _can_skip_mdns() else await _discover_mdns(timeout=mdns_timeout)
 
     by_id: dict[str, DiscoveredAgent] = {}
     # Lowest precedence first so mDNS overwrites shim-fs which overwrites tmux.
     for src in (tmux_agents, fs_agents, mdns_agents):
         for a in src:
             by_id[a.id] = a
-    return list(by_id.values())
+    result = list(by_id.values())
+    _discovery_cache = (now, list(result))
+    return result
 
 
 # ── lightweight client to talk to a discovered shim ────────────────────

@@ -48,8 +48,8 @@ except ImportError:
     MCP_AVAILABLE = False
     FastMCP = None  # type: ignore[assignment]
 
-import perspectives
-from worker_pool import WorkerPool, worker_to_row
+from agentorchestr import perspectives
+from agentorchestr.worker_pool import WorkerPool, worker_to_row
 
 
 def build_supervisor_app(
@@ -260,14 +260,14 @@ def build_supervisor_app(
     async def discover_running_agents(include_tmux: bool = True,
                                        mdns_timeout: float = 1.0) -> str:
         """Find CLI agents already running on this host (mDNS + fs cards + tmux scan)."""
-        from discovery import discover  # local import keeps mcp_bridge cheap
+        from agentorchestr.discovery import discover  # local import keeps mcp_bridge cheap
         agents = await discover(mdns_timeout=mdns_timeout, include_tmux=include_tmux)
         return json.dumps([a.to_dict() for a in agents])
 
     @mcp.tool()
     async def send_to_external_agent(agent_id: str, text: str) -> str:
         """Send input to a shim-wrapped discovered agent (transport='shim_socket' only)."""
-        from discovery import discover, ShimClient
+        from agentorchestr.discovery import discover, ShimClient
         agents = await discover(include_tmux=False)
         match = next((a for a in agents if a.id == agent_id), None)
         if not match or not match.socket:
@@ -279,7 +279,7 @@ def build_supervisor_app(
     @mcp.tool()
     async def read_from_external_agent(agent_id: str, max_bytes: int = 4096) -> str:
         """Capture recent output from a shim-wrapped discovered agent."""
-        from discovery import discover, ShimClient
+        from agentorchestr.discovery import discover, ShimClient
         agents = await discover(include_tmux=False)
         match = next((a for a in agents if a.id == agent_id), None)
         if not match or not match.socket:
@@ -294,7 +294,7 @@ def build_supervisor_app(
                             force_refresh: bool = False,
                             ttl_hours: float = 24.0) -> str:
         """DuckDuckGo search + body fetch. 24h cache; auto-persists into project memory."""
-        from research import research as _do_research
+        from agentorchestr.research import research as _do_research
         if not query or not query.strip():
             return json.dumps({"error": "empty query"})
 

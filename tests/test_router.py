@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 import pytest
 
-from router import LLMRouter, _RateLimited
+from agentorchestr.router import LLMRouter, _RateLimited
 
 
 @pytest.fixture
@@ -109,7 +109,7 @@ async def test_ollama_is_no_longer_a_provider(monkeypatch, clear_env):
     await r.init()
     assert not any(p["name"] == "ollama" for p in r.providers)
     # The PROVIDERS list itself must no longer mention ollama.
-    from router import PROVIDERS
+    from agentorchestr.router import PROVIDERS
     assert not any(p["name"] == "ollama" for p in PROVIDERS)
     await r.close()
 

@@ -1,4 +1,4 @@
-"""End-to-end test for orch_shim.
+"""End-to-end test for agentorchestr.agentorchestr.orch_shim.
 
 We use `cat` as a stand-in agent — it's universally available, takes
 stdin and echoes to stdout, and exits cleanly on EOF/SIGTERM.  This
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-import orch_shim
-from discovery import ShimClient
+from agentorchestr import orch_shim
+from agentorchestr.discovery import ShimClient
 
 
 pytestmark = pytest.mark.skipif(

@@ -46,8 +46,8 @@ dev = [
 ]
 
 [project.scripts]
-agentorchestr = "orchestrator:_sync_main"
-agentorchestr-shim = "orch_shim:main"
+agentorchestr = "agentorchestr.orchestrator:_sync_main"
+agentorchestr-shim = "agentorchestr.orch_shim:main"
 
 [project.urls]
 Homepage      = "https://github.com/IAZENT/agentorchestr"
@@ -55,32 +55,12 @@ Documentation = "https://github.com/IAZENT/agentorchestr#readme"
 Repository    = "https://github.com/IAZENT/agentorchestr"
 Issues        = "https://github.com/IAZENT/agentorchestr/issues"
 
-[tool.setuptools]
-# Real top-level modules only.  Files listed here MUST exist on disk.
-py-modules = [
-    "orchestrator",
-    "supervisor",
-    "worker_pool",
-    "perspectives",
-    "agent_detector",
-    "router",
-    "state_store",
-    "monitor",
-    "context_manager",
-    "hooks",
-    "mcp_bridge",
-    "agentorchestr_shim",
-    "discovery",
-    "research",
-    "paths",
-    "preferences",
-    "wizard",
-    "complexity",
-    "doctor",
-]
-
 [tool.setuptools.packages.find]
-include = ["agents*", "dashboard*", "memory*", "skills*"]
+# Ship the real package and its sub-packages (agentorchestr/dashboard,
+# agentorchestr/memory, agentorchestr/skills).  Everything else is dev
+# scaffolding and stays out of the wheel.
+include = ["agentorchestr*"]
+exclude = ["tests*", "agents*", "dist*", "build*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

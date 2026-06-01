@@ -8,7 +8,7 @@ from typing import Iterator
 import httpx
 import pytest
 
-import research
+from agentorchestr import research
 
 
 # ── helpers ─────────────────────────────────────────────────────────────

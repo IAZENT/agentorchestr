@@ -44,14 +44,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import perspectives
-from state_store import StateStore
+from agentorchestr import perspectives
+from agentorchestr.state_store import StateStore
 
 
-# Sentinels the worker is asked to print on its last line
-_DONE_RE     = re.compile(r"^WORKER_DONE:\s*(.*)$",     re.M)
-_BLOCKED_RE  = re.compile(r"^WORKER_BLOCKED:\s*(.*)$",  re.M)
-_FAILED_RE   = re.compile(r"^WORKER_FAILED:\s*(.*)$",   re.M)
+# Sentinels the worker is asked to print on its last line.
+#
+# We anchor BOTH ends of the line and require the sentinel to start the
+# line so a worker that quotes the sentinel inside an explanation
+# (e.g. `I'll write "WORKER_DONE: foo" when finished`) does NOT trip
+# completion.  re.MULTILINE makes ^/$ match line boundaries inside a
+# multi-line buffer.
+_DONE_RE     = re.compile(r"^WORKER_DONE:\s*(.*?)\s*$",     re.M)
+_BLOCKED_RE  = re.compile(r"^WORKER_BLOCKED:\s*(.*?)\s*$",  re.M)
+_FAILED_RE   = re.compile(r"^WORKER_FAILED:\s*(.*?)\s*$",   re.M)
+
+# How many tmux scrollback lines to inspect when polling for completion.
+# 200 is too tight: a chatty worker can push the sentinel out of view
+# between polls.  2000 lines @ ~80 cols is ~160 KB to scan, still cheap.
+_CAPTURE_TAIL_LINES = 2000
+
+# When the worker writes a structured completion file (.agentorchestr/done.flag
+# inside its worktree) we trust it over the pane regex.  The flag file is
+# atomic: workers should write `state\nsummary` to a temp file and rename.
+_DONE_FLAG_NAME = "done.flag"
+
+# Cap the number of panes per tmux window so the lead pane (always at the
+# top) stays readable.  Past this many workers, we open a second, third,
+# … 'agentorchestr-N' window.  5 = 1 lead + 4 workers, matching the
+# supervisor prompt's "cap 4" parallel-implementer guidance.
+MAX_PANES_PER_WINDOW = 5
 
 
 @dataclass
@@ -147,6 +169,45 @@ class WorkerPool:
 
     # ── worker spawn / monitor / control ──────────────────────────────
 
+    def _pick_or_create_window(self):
+        """Return the tmux window the next worker pane should land in.
+
+        Strategy:
+          * Walk through 'agentorchestr', 'agentorchestr-2', 'agentorchestr-3', ...
+            and return the first one whose pane count is below
+            MAX_PANES_PER_WINDOW.
+          * If every existing window is full, create the next overflow
+            window and return it.  The new window's initial pane will
+            host the next worker (no extra split needed).
+        """
+        if self._tmux_session is None:
+            raise RuntimeError("worker pool not started")
+        windows = list(self._tmux_session.windows or [])
+        # Look for the lead window first, then numbered overflows.
+        candidates: list[tuple[int, object]] = []
+        for w in windows:
+            name = w.window_name or ""
+            if name == "agentorchestr":
+                candidates.append((1, w))
+            elif name.startswith("agentorchestr-"):
+                try:
+                    n = int(name.rsplit("-", 1)[1])
+                    candidates.append((n, w))
+                except ValueError:
+                    continue
+        candidates.sort(key=lambda x: x[0])
+        for _, w in candidates:
+            if len(list(w.panes or [])) < MAX_PANES_PER_WINDOW:
+                return w
+        # All full — create the next one.
+        next_n = (candidates[-1][0] + 1) if candidates else 2
+        new_name = f"agentorchestr-{next_n}"
+        return self._tmux_session.new_window(
+            window_name=new_name,
+            attach=False,
+            start_directory=str(self.project_root),
+        )
+
     def _next_worker_id(self) -> str:
         self._counter += 1
         return f"w{self._counter:02d}"
@@ -180,42 +241,14 @@ class WorkerPool:
         return worktree_path, branch
 
     def _agent_argv(self, agent: dict, prompt_path: str) -> list[str]:
-        """Build the argv to launch an agent in INTERACTIVE mode with an
-        initial prompt loaded from prompt_path.
+        """Build the argv to launch an agent in INTERACTIVE mode.
 
-        Different agents have different ways to feed a prompt at startup:
-          * claude / openclaude:  positional argument
-          * kiro-cli:             chat --trust-all-tools '<prompt>'
-          * codex:                exec '<prompt>'   (one-shot; less ideal)
-          * aider:                --message '<prompt>'
-          * gemini-cli:           --prompt '<prompt>'  OR positional
-        We feed the prompt by `cat`-ing the file into the CLI's stdin via
-        `bash -lc 'cli ... < prompt_file'` because that works uniformly
-        across REPL agents and avoids quoting hell with multi-line prompts.
-
-        For agents that absolutely need a flag-based prompt we still load
-        from the same file using $(< prompt_file) inside the shell command.
+        Thin delegate to agent_launcher.build_argv so the Supervisor's
+        lead-launch path and the worker-launch path here use the same
+        per-agent CLI knowledge.
         """
-        name = agent["name"]
-        cmd = agent["cmd"]
-        # We pass the prompt via `cat` so multi-line content with quotes
-        # and apostrophes is safe.
-        if name in ("claude", "openclaude", "amp"):
-            return ["bash", "-lc", f"{shlex.quote(cmd)} --dangerously-skip-permissions \"$(cat {shlex.quote(prompt_path)})\""]
-        if name == "kiro" or cmd in ("kiro-cli", "kirocli"):
-            return ["bash", "-lc", f"{shlex.quote(cmd)} chat --trust-all-tools \"$(cat {shlex.quote(prompt_path)})\""]
-        if name == "opencode":
-            return ["bash", "-lc", f"{shlex.quote(cmd)} run \"$(cat {shlex.quote(prompt_path)})\""]
-        if name == "aider":
-            return ["bash", "-lc", f"{shlex.quote(cmd)} --yes-always --message-file {shlex.quote(prompt_path)}"]
-        if name == "codex":
-            return ["bash", "-lc", f"{shlex.quote(cmd)} exec --full-auto \"$(cat {shlex.quote(prompt_path)})\""]
-        if name == "gemini":
-            return ["bash", "-lc", f"{shlex.quote(cmd)} --prompt \"$(cat {shlex.quote(prompt_path)})\""]
-        if name == "goose":
-            return ["bash", "-lc", f"{shlex.quote(cmd)} run --text \"$(cat {shlex.quote(prompt_path)})\""]
-        # Default: positional
-        return ["bash", "-lc", f"{shlex.quote(cmd)} \"$(cat {shlex.quote(prompt_path)})\""]
+        from agentorchestr.agent_launcher import build_argv
+        return build_argv(agent, prompt_path, role="worker")
 
     async def spawn_worker(
         self,
@@ -247,7 +280,11 @@ class WorkerPool:
         idem_key = "spawn:" + hashlib.sha256(key_blob.encode()).hexdigest()[:16]
         op_id, prior = await self.store.begin_op(
             self.agentorchestr_session_id, "spawn_worker", idem_key,
-            {"task": task[:500], "perspective": perspective,
+            # Persist the full task: SQLite handles long strings fine and
+            # debuggability matters more than a few KB.  The idempotency
+            # key already hashes the full task, so truncating here used to
+            # create stale args mismatched with the key.
+            {"task": task, "perspective": perspective,
              "agent": agent.get("name"), "file_scope": file_scope or []},
         )
         if prior is not None and prior.get("worker_id") in self._workers:
@@ -279,19 +316,23 @@ class WorkerPool:
         prompt_path = str(prompt_dir / f"prompt_{wid}.txt")
         Path(prompt_path).write_text(prompt)
 
-        # All panes live in a single "agentorchestr" window so the lead (pane 0)
-        # stays visible at the top while workers tile below it.
-        agentorchestr_window = next(
-            (w for w in self._tmux_session.windows if w.window_name == "agentorchestr"),
-            self._tmux_session.active_window,
-        )
+        # All panes live in tmux windows named 'agentorchestr', 'agentorchestr-2',
+        # 'agentorchestr-3', ...  The lead occupies pane 0 of the first
+        # window; workers tile below it.  Once a window has hit
+        # MAX_PANES_PER_WINDOW (lead + N workers), new workers spill into
+        # a fresh window so individual panes stay readable.
+        agentorchestr_window = self._pick_or_create_window()
         existing_panes = list(agentorchestr_window.panes or [])
-        if len(self._workers) == 0 and len(existing_panes) <= 1:
-            # First worker: split below the lead so we don't kill its pane.
+        is_overflow_window = agentorchestr_window.window_name != "agentorchestr"
+
+        if (not is_overflow_window) and len(self._workers) == 0 and len(existing_panes) <= 1:
+            # First worker in the lead window: split below the lead.
             pane = agentorchestr_window.split(direction="down", attach=False)
+        elif is_overflow_window and len(existing_panes) == 0:
+            # Brand-new overflow window: its initial pane IS our worker pane.
+            pane = agentorchestr_window.active_pane
         else:
-            # Subsequent workers: split the BOTTOM pane (the most recent
-            # worker), so the lead at the top keeps its full width.
+            # Subsequent workers: split the bottom-most pane.
             try:
                 target = existing_panes[-1] if existing_panes else None
                 if target is not None and hasattr(target, "split"):
@@ -435,11 +476,36 @@ class WorkerPool:
         worker.pane.send_keys(message, enter=True)
 
     def detect_completion(self, worker_id: str) -> tuple[str, str]:
-        """Inspect the pane and return (state, summary).
+        """Inspect the worker and return (state, summary).
+
+        Detection order (most-trusted first):
+          1. Structured flag file at <worktree>/.agentorchestr/done.flag.
+             Format: first line is one of done|blocked|failed, remaining
+             lines are the summary.  Workers that respect the protocol
+             write this file atomically (write+rename) so we never read
+             a half-flushed state.
+          2. Sentinel regex over the last _CAPTURE_TAIL_LINES of the pane.
+             Anchored at both ends of the line so a sentinel quoted
+             inside an explanation does not trigger.
 
         state is one of: 'running', 'done', 'blocked', 'failed'.
         """
-        text = self.read_output(worker_id, tail_lines=200)
+        worker = self.get(worker_id)
+
+        # 1. Flag file (preferred).
+        flag = Path(worker.worktree) / ".agentorchestr" / _DONE_FLAG_NAME
+        if flag.exists():
+            try:
+                content = flag.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = ""
+            head, _, body = content.partition("\n")
+            head = head.strip().lower()
+            if head in ("done", "blocked", "failed"):
+                return head, body.strip()[:300]
+
+        # 2. Pane regex fallback.
+        text = self.read_output(worker_id, tail_lines=_CAPTURE_TAIL_LINES)
         for rx, st in ((_DONE_RE, "done"), (_BLOCKED_RE, "blocked"), (_FAILED_RE, "failed")):
             m = rx.search(text)
             if m:
@@ -550,7 +616,7 @@ def _render_research_hit(body: str) -> str:
     except _json.JSONDecodeError:
         return ""
     try:
-        from research import ResearchPayload, SearchResult
+        from agentorchestr.research import ResearchPayload, SearchResult
     except ImportError:
         return ""
     try:

@@ -164,7 +164,7 @@ def run_doctor(available_agents: list[dict], llm) -> int:
 
     # ── 9. XDG dirs writable ─────────────────────────────────────
     try:
-        from paths import global_data_dir, global_config_dir
+        from agentorchestr.paths import global_data_dir, global_config_dir
         for label, p in (
             ("config dir", global_config_dir()),
             ("data dir", global_data_dir()),

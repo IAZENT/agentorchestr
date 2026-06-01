@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-import mcp_bridge
-from state_store import StateStore
-from worker_pool import WorkerPool
+from agentorchestr import mcp_bridge
+from agentorchestr.state_store import StateStore
+from agentorchestr.worker_pool import WorkerPool
 
 
 @pytest.fixture
@@ -158,18 +158,18 @@ async def test_web_research_uses_cache_on_second_call(pool, tmp_path, monkeypatc
     pytest.importorskip("mcp.server.fastmcp")
 
     # Spin up a real MemoryFederation rooted in tmp_path.
-    import memory.federation as fed_mod
+    import agentorchestr.memory.federation as fed_mod
     monkeypatch.setattr(fed_mod, "GLOBAL_DIR", tmp_path / "global")
     monkeypatch.setattr(fed_mod, "HAS_SQLITE_VEC", False)
     monkeypatch.setattr(fed_mod, "HAS_FASTEMBED", False)
-    from memory import MemoryFederation
+    from agentorchestr.memory import MemoryFederation
     project = tmp_path / "proj"
     project.mkdir()
     mem = MemoryFederation(project)
     await mem.init()
 
     # Patch research.research to count network calls and return canned data.
-    import research as research_mod
+    from agentorchestr import research as research_mod
     calls: list[str] = []
     async def _fake_research(query, *, k=5, fetch_top_n=2, max_chars_per_body=4000):
         calls.append(query)
@@ -209,15 +209,15 @@ async def test_web_research_uses_cache_on_second_call(pool, tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_web_research_force_refresh_bypasses_cache(pool, tmp_path, monkeypatch):
     pytest.importorskip("mcp.server.fastmcp")
-    import memory.federation as fed_mod
+    import agentorchestr.memory.federation as fed_mod
     monkeypatch.setattr(fed_mod, "GLOBAL_DIR", tmp_path / "global")
     monkeypatch.setattr(fed_mod, "HAS_SQLITE_VEC", False)
     monkeypatch.setattr(fed_mod, "HAS_FASTEMBED", False)
-    from memory import MemoryFederation
+    from agentorchestr.memory import MemoryFederation
     project = tmp_path / "proj"; project.mkdir()
     mem = MemoryFederation(project); await mem.init()
 
-    import research as research_mod
+    from agentorchestr import research as research_mod
     calls: list[str] = []
     async def _fake_research(query, *, k=5, fetch_top_n=2, max_chars_per_body=4000):
         calls.append(query)

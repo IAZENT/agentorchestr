@@ -9,8 +9,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dashboard.server import build_app
-from state_store import StateStore
+from agentorchestr.dashboard.server import build_app
+from agentorchestr.state_store import StateStore
 
 
 @pytest.fixture

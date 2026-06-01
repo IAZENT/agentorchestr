@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from supervisor import Supervisor
+from agentorchestr.supervisor import Supervisor
 
 
 class _FailingMCP:
@@ -67,7 +67,7 @@ async def test_supervisor_run_returns_failed_on_internal_exception(
     sup._mcp_task = None
 
     # Patch the symbols supervisor.run() reaches for.
-    import supervisor as sup_mod
+    from agentorchestr import supervisor as sup_mod
     monkeypatch.setattr(sup_mod, "build_supervisor_app",
                          lambda *a, **kw: _FailingMCP())
     monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: None)
@@ -105,7 +105,7 @@ async def test_supervisor_run_handles_cancelled_error(monkeypatch, tmp_path):
     sup._mcp_app = None
     sup._mcp_task = None
 
-    import supervisor as sup_mod
+    from agentorchestr import supervisor as sup_mod
     monkeypatch.setattr(sup_mod, "build_supervisor_app",
                          lambda *a, **kw: _LongMCP())
     monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: None)
@@ -128,6 +128,6 @@ async def test_supervisor_run_handles_cancelled_error(monkeypatch, tmp_path):
 def test_mcp_bridge_exports_availability_flag():
     """orchestrator.main() reads mcp_bridge.MCP_AVAILABLE to fail fast.
     The flag must exist and be a bool."""
-    import mcp_bridge
+    from agentorchestr import mcp_bridge
     assert hasattr(mcp_bridge, "MCP_AVAILABLE")
     assert isinstance(mcp_bridge.MCP_AVAILABLE, bool)

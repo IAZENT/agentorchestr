@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from state_store import StateStore
+from agentorchestr.state_store import StateStore
 
 
 @pytest.fixture

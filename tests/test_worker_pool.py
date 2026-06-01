@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import worker_pool
-from state_store import StateStore
-from worker_pool import Worker, WorkerPool, _BLOCKED_RE, _DONE_RE, _FAILED_RE
+from agentorchestr import worker_pool
+from agentorchestr.state_store import StateStore
+from agentorchestr.worker_pool import Worker, WorkerPool, _BLOCKED_RE, _DONE_RE, _FAILED_RE
 
 
 @pytest.fixture
@@ -183,7 +183,7 @@ async def test_fetch_memory_context_no_memory(pool):
 @pytest.mark.asyncio
 async def test_fetch_memory_context_formats_hits(pool):
     """Stub a memory federation that returns 2 hits and verify formatting."""
-    from memory.federation import MemoryHit
+    from agentorchestr.memory.federation import MemoryHit
 
     class _StubMem:
         async def retrieve(self, query, k=3):
@@ -247,7 +247,7 @@ async def test_fetch_memory_context_renders_research_envelope(pool):
     """When a hit's kind=='research', the JSON envelope must be unwrapped
     into the human-friendly markdown so the worker doesn't see raw JSON."""
     import json as _json
-    from memory.federation import MemoryHit
+    from agentorchestr.memory.federation import MemoryHit
 
     payload = {
         "query": "fastapi 0.115 changes",

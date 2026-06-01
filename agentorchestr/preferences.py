@@ -32,7 +32,7 @@ import tomllib
 from pathlib import Path
 from typing import Optional
 
-from paths import global_config_dir
+from agentorchestr.paths import global_config_dir
 
 
 PREFS_FILENAME = "preferences.toml"

@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from skills import (
+from agentorchestr.skills import (
     Skill, SkillManifest, SkillRegistry, SignatureError,
     verify_skill_signature,
 )
-from skills import registry as registry_mod
-from skills import signature as sig_mod
+from agentorchestr.skills import registry as registry_mod
+from agentorchestr.skills import signature as sig_mod
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ def test_render_empty_returns_empty(tmp_path):
 # ── git add / remove ────────────────────────────────────────────────────
 
 def test_name_from_git_url():
-    from skills.registry import _name_from_git_url
+    from agentorchestr.skills.registry import _name_from_git_url
     assert _name_from_git_url("https://github.com/cosmic/python-fastapi-jwt") == "python-fastapi-jwt"
     assert _name_from_git_url("https://github.com/cosmic/foo.git") == "foo"
     assert _name_from_git_url("git@github.com:cosmic/bar.git") == "bar"

@@ -18,7 +18,7 @@ from .signature import SignatureError, verify_skill_signature
 
 def _default_skills_dir() -> Path:
     try:
-        from paths import global_skills_dir
+        from agentorchestr.paths import global_skills_dir
         return global_skills_dir()
     except Exception:
         return Path(os.path.expanduser("~/.agentorchestr/skills"))

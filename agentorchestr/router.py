@@ -34,12 +34,15 @@ sub-second to first token.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
 from typing import Optional
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 
 PROVIDERS = [
@@ -195,6 +198,8 @@ class LLMRouter:
             cd_until = self._cooldowns.get(provider["name"], 0)
             if cd_until > now:
                 last_error = _RateLimited(provider["name"], cd_until - now)
+                log.debug("provider %s on cooldown for %.1fs",
+                          provider["name"], cd_until - now)
                 continue
             t0 = time.time()
             try:
@@ -205,15 +210,24 @@ class LLMRouter:
             except _RateLimited as e:
                 self._cooldowns[provider["name"]] = time.time() + e.retry_after
                 last_error = e
+                log.debug("provider %s rate-limited: retry_after=%.1fs",
+                          provider["name"], e.retry_after)
                 continue
             except httpx.HTTPStatusError as e:
-                # Fall through to next provider; cooldown briefly on auth/server errors
+                code = e.response.status_code if e.response is not None else "?"
                 if e.response is not None and e.response.status_code in (401, 403, 500, 502, 503):
                     self._cooldowns[provider["name"]] = time.time() + 30
                 last_error = e
+                log.debug("provider %s HTTP %s: %s",
+                          provider["name"], code, e, exc_info=True)
                 continue
             except Exception as e:
                 last_error = e
+                # Most likely a JSON parse failure or a missing response
+                # field — easy to mistake for "all providers failed" if
+                # we don't surface the original error somewhere.
+                log.debug("provider %s raised %s: %r",
+                          provider["name"], type(e).__name__, e, exc_info=True)
                 continue
         raise RuntimeError(f"All LLM providers failed. Last error: {last_error!r}")
 
