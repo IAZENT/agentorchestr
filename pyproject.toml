@@ -50,10 +50,10 @@ orch      = "orchestrator:_sync_main"
 orch-shim = "orch_shim:main"
 
 [project.urls]
-Homepage      = "https://github.com/IAZENT/ORCH"
-Documentation = "https://github.com/IAZENT/ORCH#readme"
-Repository    = "https://github.com/IAZENT/ORCH"
-Issues        = "https://github.com/IAZENT/ORCH/issues"
+Homepage      = "https://github.com/IAZENT/agentorchestr"
+Documentation = "https://github.com/IAZENT/agentorchestr#readme"
+Repository    = "https://github.com/IAZENT/agentorchestr"
+Issues        = "https://github.com/IAZENT/agentorchestr/issues"
 
 [tool.setuptools]
 # Real top-level modules only.  Files listed here MUST exist on disk.
