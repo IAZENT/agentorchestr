@@ -104,8 +104,12 @@ def _read_goal(args) -> str:
 
 def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
     if not sys.stdin.isatty():
-        cli = [a for a in available if a["type"] in ("sdk", "cli")][:3]
-        return (cli, cli[0]) if cli else ([], None)
+        cli = [a for a in available if a["type"] in ("sdk", "cli")][:4]
+        if not cli:
+            return [], None
+        lead = max(cli, key=lambda a: a["capabilities"].get("orchestrate", 0))
+        workers = [a for a in cli if a["name"] != lead["name"]] or cli
+        return workers, lead
     console.print("\n[bold cyan]=== Available agents ===[/bold cyan]")
     for i, a in enumerate(available, 1):
         caps = a.get("capabilities", {})
@@ -116,7 +120,7 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
     except (KeyboardInterrupt, EOFError):
         return [], None
     if not raw or raw == "all":
-        selected = available[:] if raw == "all" else available[:3]
+        selected = available[:] if raw == "all" else available[:4]
     else:
         selected = []
         for part in raw.split(","):
@@ -127,17 +131,37 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
             except ValueError:
                 pass
         if not selected:
-            selected = available[:3]
+            selected = available[:4]
     if not selected:
         return [], None
-    if len(selected) == 1:
-        return selected, selected[0]
     cli_sub = [a for a in selected if a["type"] in ("sdk", "cli")] or selected
     lead = max(cli_sub, key=lambda a: a["capabilities"].get("orchestrate", 0))
-    return selected, lead
+    # Lead is excluded from the worker pool so it isn't both supervisor and worker
+    workers = [a for a in selected if a["name"] != lead["name"]] or selected
+    return workers, lead
 
 
 def _resolve_agents(args, available: list[dict]) -> tuple[list[dict], dict | None]:
+    """Return (all_agents, lead_agent).
+
+    Rules:
+    - The lead agent is EXCLUDED from the worker pool so it can't be
+      accidentally spawned as its own worker (which would cause confusion
+      when a single claude process tries to be both orchestrator and worker).
+    - If only one agent is installed we still allow it to run — the lead
+      will just spawn workers using the same agent binary (separate panes,
+      separate sessions). We warn the user so they understand the setup.
+    - In non-interactive mode we pick the top-3 by orchestrate score,
+      choosing the highest-score one as lead. If multiple agents share the
+      same binary (e.g. two 'claude' entries), only unique names are used.
+    """
+    cli_types = ("sdk", "cli")
+
+    def _best_lead(candidates: list[dict]) -> dict | None:
+        cli_sub = [a for a in candidates if a["type"] in cli_types] or candidates
+        return max(cli_sub, key=lambda a: a["capabilities"].get("orchestrate", 0)) if cli_sub else None
+
+    # ── explicit --agents / --lead flags ──────────────────────────────
     if args.agents:
         forced = [a for a in available if a["name"] in args.agents]
         if not forced:
@@ -148,12 +172,40 @@ def _resolve_agents(args, available: list[dict]) -> tuple[list[dict], dict | Non
             if not match:
                 console.print(f"[red]--lead {args.lead} not in --agents[/red]")
                 return [], None
-            return forced, match[0]
-        cli_sub = [a for a in forced if a["type"] in ("sdk", "cli")] or forced
-        return forced, max(cli_sub, key=lambda a: a["capabilities"].get("orchestrate", 0))
+            lead = match[0]
+        else:
+            lead = _best_lead(forced)
+        # Exclude the lead from the worker pool (different binary = ok to re-use,
+        # same binary where it's the ONLY agent = spawn additional instances)
+        workers = [a for a in forced if a["name"] != lead["name"]] or forced
+        return workers, lead
+
+    # ── non-interactive auto-pick ──────────────────────────────────────
     if not args.interactive:
-        cli = [a for a in available if a["type"] in ("sdk", "cli")][:3]
-        return (cli, cli[0]) if cli else ([], None)
+        cli = [a for a in available if a["type"] in cli_types]
+        if not cli:
+            cli = available  # fall back to IDE agents if nothing else
+        if not cli:
+            return [], None
+
+        lead = _best_lead(cli)
+        if lead is None:
+            return [], None
+
+        if len(cli) == 1:
+            # Only one agent — lead IS the worker binary too (separate instances).
+            console.print(
+                f"[yellow]⚠ Only one agent detected ({lead['name']}). "
+                "Workers will run as additional instances of the same agent. "
+                "Install more agents (kiro, opencode, aider…) for true diversity.[/yellow]"
+            )
+            return cli, lead
+
+        # Exclude the lead from the worker list so workers are different agents.
+        workers = [a for a in cli if a["name"] != lead["name"]][:3]
+        return workers or cli, lead
+
+    # ── interactive pick ───────────────────────────────────────────────
     return _interactive_pick(available)
 
 

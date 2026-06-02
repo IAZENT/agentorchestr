@@ -23,6 +23,11 @@ class _FailingMCP:
         raise RuntimeError("mcp transport went boom")
 
 
+async def _instant_true(*_a, **_kw) -> bool:
+    """Stub for _wait_for_port that returns True immediately (port 'ready')."""
+    return True
+
+
 class _NoopPool:
     """The minimum pool surface Supervisor.run() / Supervisor.cleanup() touch."""
     def __init__(self):
@@ -65,12 +70,15 @@ async def test_supervisor_run_returns_failed_on_internal_exception(
     sup._goal_future = None
     sup._mcp_app = None
     sup._mcp_task = None
+    sup._written_mcp_paths = []
 
     # Patch the symbols supervisor.run() reaches for.
     from agentorchestr import supervisor as sup_mod
     monkeypatch.setattr(sup_mod, "build_supervisor_app",
                          lambda *a, **kw: _FailingMCP())
-    monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: None)
+    monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: [])
+    monkeypatch.setattr(sup_mod, "_wait_for_port",
+                         lambda *a, **kw: _instant_true())
     monkeypatch.setattr(sup_mod, "_supervisor_argv",
                          lambda lead, prompt: ["bash", "-lc", "true"])
 
@@ -104,11 +112,14 @@ async def test_supervisor_run_handles_cancelled_error(monkeypatch, tmp_path):
     sup._goal_future = None
     sup._mcp_app = None
     sup._mcp_task = None
+    sup._written_mcp_paths = []
 
     from agentorchestr import supervisor as sup_mod
     monkeypatch.setattr(sup_mod, "build_supervisor_app",
                          lambda *a, **kw: _LongMCP())
-    monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: None)
+    monkeypatch.setattr(sup_mod, "write_mcp_config", lambda *a, **kw: [])
+    monkeypatch.setattr(sup_mod, "_wait_for_port",
+                         lambda *a, **kw: _instant_true())
     monkeypatch.setattr(sup_mod, "_supervisor_argv",
                          lambda lead, prompt: ["bash", "-lc", "true"])
 
