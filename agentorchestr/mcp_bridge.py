@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from agentorchestr.agent_detector import AGENT_REGISTRY
+
 try:
     from mcp.server.fastmcp import FastMCP
     MCP_AVAILABLE = True
@@ -48,8 +50,7 @@ except ImportError:
     MCP_AVAILABLE = False
     FastMCP = None  # type: ignore[assignment]
 
-from agentorchestr import perspectives
-from agentorchestr.worker_pool import WorkerPool, worker_to_row
+DEFAULT_MCP_TRANSPORT = "streamable-http" if MCP_AVAILABLE and hasattr(FastMCP, "run_streamable_http_async") else "sse"
 
 
 def build_supervisor_app(
@@ -373,11 +374,16 @@ def build_supervisor_app(
 
 # ── standalone CLI (kept for ad-hoc use + config writing) ─────────────
 
-def _mcp_entry(port: int, transport: str) -> dict:
-    """Build the single agentorchestr mcpServers entry."""
+def _mcp_entry(port: int, transport: str, session_id: str | None = None) -> tuple[str, dict]:
+    """Build a named agentorchestr mcpServers entry."""
     if transport == "sse":
         entry = {
             "url": f"http://127.0.0.1:{port}/sse",
+            "description": "agentorchestr supervisor bridge (session-scoped, auto-removed on exit)",
+        }
+    elif transport == "streamable-http":
+        entry = {
+            "url": f"http://127.0.0.1:{port}/mcp",
             "description": "agentorchestr supervisor bridge (session-scoped, auto-removed on exit)",
         }
     else:
@@ -386,44 +392,108 @@ def _mcp_entry(port: int, transport: str) -> dict:
             "args": [str(Path(__file__).resolve()), "--transport", "stdio"],
             "description": "agentorchestr supervisor bridge (session-scoped, auto-removed on exit)",
         }
-    return entry
+
+    key = "agentorchestr" if session_id is None else f"agentorchestr-{session_id}"
+    entry["_managed_by"] = "agentorchestr"
+    if session_id is not None:
+        entry["_session_id"] = session_id
+    return key, entry
 
 
-def _agent_config_locations(project_root: str | None = None) -> dict[str, str]:
+def _agent_config_locations(project_root: str | None = None) -> dict[str, tuple[list[str], list[str]]]:
     """
-    Return candidate MCP config paths.
+    Return candidate MCP config paths for every known agent.
 
     Search order per agent (first found wins at write time):
-      1. Project-local config  — <project>/.agentorchestr/<agent>/mcp.json
-         This is safe: it only affects this project and never touches the
-         user's global setup.
-      2. Global config         — ~/.claude/mcp.json etc.
-         These are only touched if no project root is supplied OR the agent
-         doesn't support project-local configs.
+      1. Project-local config  — project-specific config paths the client
+         may respect for this agent.
+      2. Global config         — user config paths in the home directory.
 
-    We always prefer the project-local path so we never accidentally corrupt
-    the user's hand-crafted global MCP server list.
+    We prefer project-local paths so we never accidentally corrupt the
+    user's global MCP server list when a project root is supplied.
     """
     proj = Path(project_root).resolve() if project_root else None
 
     def local(subpath: str) -> str | None:
         if proj is None:
             return None
-        p = proj / ".agentorchestr" / "mcp_configs" / subpath
-        return str(p)
+        return str(proj / subpath)
 
-    return {
-        # (agent-display-name, local-path-or-None, global-path)
-        "claude":   (local("claude/mcp.json"),   os.path.expanduser("~/.claude/mcp.json")),
-        "kiro":     (local("kiro/mcp.json"),      os.path.expanduser("~/.kiro/settings/mcp.json")),
-        "cursor":   (local("cursor/mcp.json"),    os.path.expanduser("~/.cursor/mcp.json")),
-        "windsurf": (local("windsurf/mcp.json"),  os.path.expanduser("~/.windsurf/mcp.json")),
-        "opencode": (local("opencode/mcp.json"),  os.path.expanduser("~/.opencode/mcp.json")),
-    }
+    def expand_user(path: str) -> str:
+        return os.path.expanduser(path)
+
+    def agent_project_paths(agent_name: str) -> list[str]:
+        paths: list[str | None] = [
+            local(f".agentorchestr/mcp_configs/{agent_name}/mcp.json"),
+            local(f".agentorchestr/mcp_configs/{agent_name}/settings.json"),
+            local(f".{agent_name}/settings.json"),
+            local(f".{agent_name}/mcp.json"),
+        ]
+        if agent_name == "claude":
+            paths.insert(0, local(".claude/settings.json"))
+            paths.insert(1, local(".claude/mcp.json"))
+        return [p for p in paths if p]
+
+    def agent_global_paths(agent_name: str) -> list[str]:
+        paths: list[str] = [
+            expand_user(f"~/.{agent_name}/settings.json"),
+            expand_user(f"~/.{agent_name}/mcp.json"),
+            expand_user(f"~/.{agent_name}/config/mcp.json"),
+        ]
+        if agent_name == "claude":
+            paths = [
+                expand_user("~/.claude/settings.json"),
+                expand_user("~/.claude/mcp.json"),
+                expand_user("~/.claude/config/mcp.json"),
+            ]
+        elif agent_name == "kiro":
+            paths.insert(0, expand_user("~/.kiro/settings/mcp.json"))
+        return paths
+
+    locations: dict[str, tuple[list[str], list[str]]] = {}
+    for agent_name in AGENT_REGISTRY:
+        locations[agent_name] = (
+            agent_project_paths(agent_name),
+            agent_global_paths(agent_name),
+        )
+    return locations
 
 
-def _read_existing_config(path: str) -> dict:
-    """Read an existing MCP config file. Returns {} if absent or unparseable."""
+def _agent_config_candidates(agent_name: str, project_root: str | None = None) -> tuple[list[str], list[str]]:
+    """Return candidate local/global config paths for any agent name."""
+    locations = _agent_config_locations(project_root)
+    if agent_name in locations:
+        return locations[agent_name]
+
+    def local(subpath: str) -> str | None:
+        if project_root is None:
+            return None
+        return str(Path(project_root).resolve() / subpath)
+
+    def expand_user(path: str) -> str:
+        return os.path.expanduser(path)
+
+    local_paths: list[str] = [
+        local(f".agentorchestr/mcp_configs/{agent_name}/mcp.json"),
+        local(f".agentorchestr/mcp_configs/{agent_name}/settings.json"),
+        local(f".{agent_name}/settings.json"),
+        local(f".{agent_name}/mcp.json"),
+    ]
+    global_paths = [
+        expand_user(f"~/.{agent_name}/settings.json"),
+        expand_user(f"~/.{agent_name}/mcp.json"),
+        expand_user(f"~/.{agent_name}/config/mcp.json"),
+    ]
+    return [p for p in local_paths if p], global_paths
+
+
+def _read_existing_config(path: str) -> dict | None:
+    """Read an existing MCP config file.
+
+    Returns the decoded JSON object if readable, {} if the file is absent,
+    or None if the file is present but invalid. We avoid clobbering malformed
+    user config files.
+    """
     p = Path(path)
     if not p.exists():
         return {}
@@ -432,15 +502,15 @@ def _read_existing_config(path: str) -> dict:
         data = json.loads(text)
         return data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        return None
 
 
-def _write_merged_config(path: str, entry: dict) -> bool:
+def _write_merged_config(path: str, entry: dict, entry_key: str = "agentorchestr") -> bool:
     """
     Merge our entry into the existing config at `path`.
 
     - Reads the existing file (if any) to preserve all other mcpServers.
-    - Adds/replaces only the "agentorchestr" key.
+    - Adds/replaces only the named entry key.
     - Writes atomically via a temp file + rename so a crash never leaves
       a half-written config.
     - Returns True on success, False on error.
@@ -449,11 +519,15 @@ def _write_merged_config(path: str, entry: dict) -> bool:
     p.parent.mkdir(parents=True, exist_ok=True)
 
     existing = _read_existing_config(path)
+    if existing is None:
+        print(f"[warn] skipping {path}: invalid JSON", file=sys.stderr)
+        return False
+
     servers = existing.get("mcpServers", {})
     if not isinstance(servers, dict):
         servers = {}
 
-    servers["agentorchestr"] = entry
+    servers[entry_key] = entry
     existing["mcpServers"] = servers
 
     tmp = p.with_suffix(".agentorchestr_tmp")
@@ -472,9 +546,10 @@ def _write_merged_config(path: str, entry: dict) -> bool:
 
 def write_mcp_config(
     port: int = 8765,
-    transport: str = "sse",
+    transport: str = "streamable-http",
     project_root: str | None = None,
     lead_agent_name: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     """
     Inject the agentorchestr MCP entry into agent config files.
@@ -486,38 +561,40 @@ def write_mcp_config(
         global path — but MERGE (not overwrite) so existing entries survive.
       • If only one agent is the lead, only write its config (no need to
         pollute every agent's config for a single-lead session).
+      • Each session uses its own config key when possible so concurrent
+        sessions do not collide.
 
     Returns list of paths that were successfully written.
     """
-    entry = _mcp_entry(port, transport)
-    locations = _agent_config_locations(project_root)
+    entry_key, entry = _mcp_entry(port, transport, session_id=session_id)
     written: list[str] = []
 
-    for agent_name, (local_path, global_path) in locations.items():
-        # If a specific lead agent is set, only write that agent's config.
-        if lead_agent_name and agent_name != lead_agent_name:
+    agent_names = [lead_agent_name] if lead_agent_name else list(_agent_config_locations(project_root).keys())
+    for agent_name in agent_names:
+        if agent_name is None:
             continue
-
-        # Prefer local path — it's isolated to this project.
-        target = local_path if local_path else global_path
-
-        if _write_merged_config(target, entry):
-            written.append(target)
-            print(f"✓ MCP config ({agent_name}): {target}")
+        local_paths, global_paths = _agent_config_candidates(agent_name, project_root)
+        candidates = [p for p in local_paths if p] + global_paths
+        for target in candidates:
+            if _write_merged_config(target, entry, entry_key=entry_key):
+                written.append(target)
+                print(f"✓ MCP config ({agent_name}): {target}")
+                break
 
     return written
 
 
 def remove_mcp_config(
     written_paths: list[str],
+    entry_key: str = "agentorchestr",
 ) -> None:
     """
     Remove the agentorchestr entry from every config file that was written
     during this session.  Called by Supervisor.cleanup().
 
-    - If the only remaining key under mcpServers is "agentorchestr", the
-      entire mcpServers block is left as {} (don't delete the file — the
-      user may have other top-level keys we don't know about).
+    - If the only remaining key under mcpServers is the managed entry,
+      the entire mcpServers block is left as {} (don't delete the file —
+      the user may have other top-level keys we don't know about).
     - If the file no longer exists, skip silently.
     """
     for path in written_paths:
@@ -525,9 +602,11 @@ def remove_mcp_config(
         if not p.exists():
             continue
         data = _read_existing_config(path)
+        if data is None:
+            continue
         servers = data.get("mcpServers", {})
-        if isinstance(servers, dict) and "agentorchestr" in servers:
-            del servers["agentorchestr"]
+        if isinstance(servers, dict) and entry_key in servers:
+            del servers[entry_key]
             data["mcpServers"] = servers
             tmp = p.with_suffix(".agentorchestr_tmp")
             try:

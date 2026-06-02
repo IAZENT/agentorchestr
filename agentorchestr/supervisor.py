@@ -26,7 +26,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from agentorchestr.mcp_bridge import build_supervisor_app, write_mcp_config, remove_mcp_config
+from agentorchestr.mcp_bridge import (
+    DEFAULT_MCP_TRANSPORT,
+    build_supervisor_app,
+    remove_mcp_config,
+    write_mcp_config,
+)
 from agentorchestr.state_store import StateStore
 from agentorchestr.worker_pool import WorkerPool
 
@@ -181,6 +186,7 @@ class Supervisor:
         self.port = port or _free_port()
         self.memory = memory
         self.skills = skills
+        self.mcp_transport = DEFAULT_MCP_TRANSPORT
         self.pool = WorkerPool(
             str(self.project_root), session_id, store,
             memory=memory, skills=skills,
@@ -189,6 +195,7 @@ class Supervisor:
         self._mcp_app = None
         self._mcp_task: asyncio.Task | None = None
         self._written_mcp_paths: list[str] = []  # cleaned up on exit
+        self._mcp_entry_key: str | None = None
 
     @property
     def attach_command(self) -> str:
@@ -234,7 +241,11 @@ class Supervisor:
         )
 
         # 2. Start MCP server in the background FIRST
-        self._mcp_task = asyncio.create_task(self._mcp_app.run_sse_async())
+        mcp_transport = getattr(self, "mcp_transport", DEFAULT_MCP_TRANSPORT)
+        if mcp_transport == "streamable-http" and hasattr(self._mcp_app, "run_streamable_http_async"):
+            self._mcp_task = asyncio.create_task(self._mcp_app.run_streamable_http_async())
+        else:
+            self._mcp_task = asyncio.create_task(self._mcp_app.run_sse_async())
 
         def _on_mcp_done(t: asyncio.Task) -> None:
             if self._goal_future and not self._goal_future.done():
@@ -259,11 +270,13 @@ class Supervisor:
         # 4. Write MCP config — server is live so the URL is valid now.
         #    Use project-local paths so we never corrupt the user's global
         #    MCP config. Only write the lead agent's config file.
+        self._mcp_entry_key = f"agentorchestr-{self.session_id}"
         self._written_mcp_paths = write_mcp_config(
             self.port,
-            transport="sse",
+            transport=mcp_transport,
             project_root=str(self.project_root),
             lead_agent_name=self.lead_agent.get("name"),
+            session_id=self.session_id,
         )
 
         # 5. Compose the supervisor's first user message
@@ -295,8 +308,8 @@ class Supervisor:
         finally:
             self._mcp_task.cancel()
             try:
-                await self._mcp_task
-            except (asyncio.CancelledError, Exception):
+                await asyncio.wait_for(self._mcp_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 pass
 
         return state, summary
@@ -305,5 +318,8 @@ class Supervisor:
         # Remove the agentorchestr entry from every config file we wrote.
         # This restores the user's original MCP server list exactly.
         if self._written_mcp_paths:
-            remove_mcp_config(self._written_mcp_paths)
+            remove_mcp_config(
+                self._written_mcp_paths,
+                entry_key=self._mcp_entry_key or "agentorchestr",
+            )
         await self.pool.cleanup(keep_tmux=keep_tmux)

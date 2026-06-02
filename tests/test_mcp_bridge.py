@@ -53,6 +53,79 @@ async def test_supervisor_app_registers_expected_tools(pool):
     assert expected <= names, f"missing tools: {expected - names}"
 
 
+def test_write_mcp_config_writes_claude_settings_json(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    claude_dir = project / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(json.dumps({"mcpServers": {"existing": {"command": "echo", "args": []}}}), encoding="utf-8")
+
+    written = mcp_bridge.write_mcp_config(
+        port=8765,
+        transport="sse",
+        project_root=str(project),
+        lead_agent_name="claude",
+    )
+
+    assert str(settings_path) in written
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "agentorchestr" in data["mcpServers"]
+    assert data["mcpServers"]["existing"]["command"] == "echo"
+
+
+def test_write_mcp_config_writes_generic_agent_paths(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    written = mcp_bridge.write_mcp_config(
+        port=8765,
+        transport="sse",
+        project_root=str(project),
+        lead_agent_name="openclaude",
+    )
+
+    assert any("openclaude" in p for p in written)
+    assert (project / ".agentorchestr" / "mcp_configs" / "openclaude" / "mcp.json").exists()
+
+
+def test_write_mcp_config_falls_back_for_unknown_agent(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    written = mcp_bridge.write_mcp_config(
+        port=8765,
+        transport="sse",
+        project_root=str(project),
+        lead_agent_name="unknownagent",
+    )
+
+    assert any("unknownagent" in p for p in written)
+    assert (project / ".agentorchestr" / "mcp_configs" / "unknownagent" / "mcp.json").exists()
+
+
+def test_write_merged_config_skips_invalid_existing(tmp_path):
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    entry = {"url": "http://127.0.0.1:8765/sse"}
+    assert not mcp_bridge._write_merged_config(str(invalid), entry)
+    assert invalid.read_text(encoding="utf-8") == "not-json"
+
+
+def test_remove_mcp_config_prunes_session_entry(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({
+        "mcpServers": {
+            "agentorchestr-abcd1234": {"url": "http://localhost:8765/sse"},
+            "existing": {"command": "echo", "args": []},
+        }
+    }), encoding="utf-8")
+
+    mcp_bridge.remove_mcp_config([str(path)], entry_key="agentorchestr-abcd1234")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "agentorchestr-abcd1234" not in data["mcpServers"]
+    assert data["mcpServers"]["existing"]["command"] == "echo"
+
+
 @pytest.mark.asyncio
 async def test_mark_goal_done_invokes_callback(pool):
     pytest.importorskip("mcp.server.fastmcp")

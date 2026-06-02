@@ -111,10 +111,41 @@ def _interactive_pick(available: list[dict]) -> tuple[list[dict], dict | None]:
         workers = [a for a in cli if a["name"] != lead["name"]] or cli
         return workers, lead
     console.print("\n[bold cyan]=== Available agents ===[/bold cyan]")
+    from rich.table import Table
+
+    table = Table(show_header=True, header_style="cyan", box=None, pad_edge=False)
+    for col, kw in [
+        ("#", {"justify": "right", "style": "cyan", "no_wrap": True}),
+        ("name", {"style": "bold"}),
+        ("type", {}),
+        ("version", {"style": "dim"}),
+        ("orch", {"justify": "right"}),
+        ("impl", {"justify": "right"}),
+        ("flags", {"style": "dim"}),
+    ]:
+        table.add_column(col, **kw)
+
     for i, a in enumerate(available, 1):
         caps = a.get("capabilities", {})
-        console.print(f"  [cyan]{i}.[/cyan] {a['name']:<14} orch={caps.get('orchestrate',0)} impl={caps.get('implement',0)}")
-    console.print("\nPick workers (comma-sep, 'all', Enter=auto): ", end="")
+        flags = " ".join(filter(None, [
+            "parallel" if caps.get("parallel") else "",
+            "mcp" if caps.get("mcp") else "",
+        ])) or "none"
+        table.add_row(
+            str(i),
+            a["name"],
+            a["type"],
+            a.get("version", "?")[:32],
+            str(caps.get("orchestrate", 0)),
+            str(caps.get("implement", 0)),
+            flags,
+        )
+
+    console.print(table)
+    console.print(
+        "\nPick worker agents by number (comma-sep), 'all', or Enter for the default selection: ",
+        end=""
+    )
     try:
         raw = input().strip().lower()
     except (KeyboardInterrupt, EOFError):
@@ -180,33 +211,33 @@ def _resolve_agents(args, available: list[dict]) -> tuple[list[dict], dict | Non
         workers = [a for a in forced if a["name"] != lead["name"]] or forced
         return workers, lead
 
+    # ── interactive selection on TTY ───────────────────────────────────
+    if args.interactive or sys.stdin.isatty():
+        return _interactive_pick(available)
+
     # ── non-interactive auto-pick ──────────────────────────────────────
-    if not args.interactive:
-        cli = [a for a in available if a["type"] in cli_types]
-        if not cli:
-            cli = available  # fall back to IDE agents if nothing else
-        if not cli:
-            return [], None
+    cli = [a for a in available if a["type"] in cli_types]
+    if not cli:
+        cli = available  # fall back to IDE agents if nothing else
+    if not cli:
+        return [], None
 
-        lead = _best_lead(cli)
-        if lead is None:
-            return [], None
+    lead = _best_lead(cli)
+    if lead is None:
+        return [], None
 
-        if len(cli) == 1:
-            # Only one agent — lead IS the worker binary too (separate instances).
-            console.print(
-                f"[yellow]⚠ Only one agent detected ({lead['name']}). "
-                "Workers will run as additional instances of the same agent. "
-                "Install more agents (kiro, opencode, aider…) for true diversity.[/yellow]"
-            )
-            return cli, lead
+    if len(cli) == 1:
+        # Only one agent — lead IS the worker binary too (separate instances).
+        console.print(
+            f"[yellow]⚠ Only one agent detected ({lead['name']}). "
+            "Workers will run as additional instances of the same agent. "
+            "Install more agents (kiro, opencode, aider…) for true diversity.[/yellow]"
+        )
+        return cli, lead
 
-        # Exclude the lead from the worker list so workers are different agents.
-        workers = [a for a in cli if a["name"] != lead["name"]][:3]
-        return workers or cli, lead
-
-    # ── interactive pick ───────────────────────────────────────────────
-    return _interactive_pick(available)
+    # Exclude the lead from the worker list so workers are different agents.
+    workers = [a for a in cli if a["name"] != lead["name"]][:3]
+    return workers or cli, lead
 
 
 def _show_agents_table(available: list[dict]) -> None:
